@@ -23,6 +23,131 @@
 #include  "EditableText.hpp"
 #include <cstdio>
 #include <iostream>
+#include <complex>
+#include <vector>
+#include <cmath>
+
+// Add this class to FildesUI.cpp before the FildesUI class
+class TransferFunctionVisualizer {
+public:
+    TransferFunctionVisualizer() 
+        : mNumerator(1, 0.0)
+        , mDenominator(1, 1.0)
+        , mResponseCache()
+        , mFrequencies()
+        , mMagnitudes()
+        , mPhases()
+        , mSampleRate(44100.0)
+        , mNeedsUpdate(true)
+    {
+        // Initialize with default frequency points (logarithmic scale)
+        updateFrequencyPoints();
+    }
+
+    void setNumerator(const std::vector<double>& coeffs) {
+        mNumerator = coeffs;
+        mNeedsUpdate = true;
+    }
+
+    void setDenominator(const std::vector<double>& coeffs) {
+        mDenominator = coeffs;
+        mNeedsUpdate = true;
+    }
+
+    void setSampleRate(double sampleRate) {
+        mSampleRate = sampleRate;
+        updateFrequencyPoints();
+        mNeedsUpdate = true;
+    }
+
+    void updateFrequencyPoints() {
+        // Create logarithmic frequency scale from 20Hz to Nyquist
+        const double nyquist = mSampleRate / 2.0;
+        const double minFreq = 20.0;
+        const int numPoints = 200;
+        
+        mFrequencies.resize(numPoints);
+        
+        for (int i = 0; i < numPoints; ++i) {
+            const double t = static_cast<double>(i) / (numPoints - 1);
+            // Logarithmic scale from minFreq to nyquist
+            mFrequencies[i] = minFreq * std::pow(nyquist / minFreq, t);
+        }
+        
+        mMagnitudes.resize(numPoints);
+        mPhases.resize(numPoints);
+        mNeedsUpdate = true;
+    }
+
+    void calculateResponse() {
+        if (!mNeedsUpdate) {
+            return;
+        }
+        
+        const size_t numFreqs = mFrequencies.size();
+        
+        for (size_t i = 0; i < numFreqs; ++i) {
+            double frequency = mFrequencies[i];
+            double omega = 2.0 * M_PI * frequency / mSampleRate;
+            
+            std::complex<double> numerator(0.0, 0.0);
+            std::complex<double> denominator(0.0, 0.0);
+            
+            // Calculate numerator
+            for (size_t n = 0; n < mNumerator.size(); ++n) {
+                double angle = -omega * static_cast<double>(n);
+                std::complex<double> z(cos(angle), sin(angle));
+                numerator += mNumerator[n] * z;
+            }
+            
+            // Calculate denominator
+            for (size_t n = 0; n < mDenominator.size(); ++n) {
+                double angle = -omega * static_cast<double>(n);
+                std::complex<double> z(cos(angle), sin(angle));
+                denominator += mDenominator[n] * z;
+            }
+            
+            // Calculate transfer function
+            std::complex<double> response = numerator / denominator;
+            
+            // Calculate magnitude in dB and phase
+            mMagnitudes[i] = 20.0 * log10(std::abs(response) + 1e-6);
+            mPhases[i] = std::arg(response);
+        }
+        
+        mNeedsUpdate = false;
+    }
+
+    const std::vector<double>& getFrequencies() const {
+        return mFrequencies;
+    }
+
+    const std::vector<double>& getMagnitudes() const {
+        return mMagnitudes;
+    }
+
+    const std::vector<double>& getPhases() const {
+        return mPhases;
+    }
+
+    double getMinMagnitude() const {
+        return *std::min_element(mMagnitudes.begin(), mMagnitudes.end());
+    }
+
+    double getMaxMagnitude() const {
+        return *std::max_element(mMagnitudes.begin(), mMagnitudes.end());
+    }
+
+private:
+    std::vector<double> mNumerator;
+    std::vector<double> mDenominator;
+    std::vector<std::complex<double>> mResponseCache;
+    std::vector<double> mFrequencies;
+    std::vector<double> mMagnitudes;
+    std::vector<double> mPhases;
+    double mSampleRate;
+    bool mNeedsUpdate;
+};
 
 START_NAMESPACE_DISTRHO
 
@@ -47,6 +172,16 @@ class FildesUI : public UI,
     ScopedPointer<DemoWidgetClickable> fWidgetClickable;
     ScopedPointer<EditableText> fCoeffT, fCoeffB;
     ScopedPointer<DGL::SubWidget> fContainer;
+
+    // Add the visualizer
+    TransferFunctionVisualizer fVisualizer;
+    
+    // Store the current coefficients
+    std::vector<double> fNumerator;
+    std::vector<double> fDenominator;
+    
+    // Area for the frequency response plot
+    DGL::Rectangle<int> fResponseArea;
 
 public:
     FildesUI()
@@ -113,6 +248,208 @@ protected:
         cairo_move_to(cr, 10, 30);
         cairo_show_text(cr, "Transfer Function:"); // Static text
 
+        drawFrequencyResponse(cr);
+    }
+
+    void drawFrequencyResponse(cairo_t* cr)
+    {
+        // Calculate the response if needed
+        fVisualizer.calculateResponse();
+        
+        // Prepare the plot area
+        const int x = fResponseArea.getX();
+        const int y = fResponseArea.getY();
+        const int width = fResponseArea.getWidth();
+        const int height = fResponseArea.getHeight();
+        
+        // Draw border and background
+        cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+        cairo_rectangle(cr, x, y, width, height);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+        
+        // Draw grid lines
+        drawGrid(cr, x, y, width, height);
+        
+        // Get frequency response data
+        const std::vector<double>& frequencies = fVisualizer.getFrequencies();
+        const std::vector<double>& magnitudes = fVisualizer.getMagnitudes();
+        
+        if (frequencies.empty() || magnitudes.empty()) {
+            return;
+        }
+        
+        // Define magnitude range in dB (adjust as needed)
+        const double minDb = -60.0;
+        const double maxDb = 20.0;
+        
+        // Draw the magnitude response
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.8); // Blue for magnitude
+        cairo_set_line_width(cr, 2.0);
+        
+        cairo_new_path(cr);
+        
+        for (size_t i = 0; i < frequencies.size(); ++i) {
+            // Map frequency to x (logarithmic)
+            const double logMinFreq = log10(20.0);
+            const double logMaxFreq = log10(22050.0);
+            const double logFreq = log10(frequencies[i]);
+            const double normalizedX = (logFreq - logMinFreq) / (logMaxFreq - logMinFreq);
+            const double plotX = x + normalizedX * width;
+            
+            // Map magnitude to y (linear in dB)
+            const double normalizedY = (magnitudes[i] - minDb) / (maxDb - minDb);
+            const double clampedY = std::max(0.0, std::min(1.0, normalizedY));
+            const double plotY = y + height - (clampedY * height);
+            
+            if (i == 0) {
+                cairo_move_to(cr, plotX, plotY);
+            } else {
+                cairo_line_to(cr, plotX, plotY);
+            }
+        }
+        
+        cairo_stroke(cr);
+        
+        // Draw labels
+        drawFrequencyLabels(cr, x, y, width, height);
+        drawMagnitudeLabels(cr, x, y, width, height, minDb, maxDb);
+    }
+
+    void drawGrid(cairo_t* cr, int x, int y, int width, int height)
+    {
+        // Draw horizontal grid lines (magnitude)
+        cairo_set_source_rgba(cr, 0.5, 0.5, 0.5, 0.5);
+        cairo_set_line_width(cr, 0.5);
+        
+        const int numMagLines = 9; // -60, -50, -40, -30, -20, -10, 0, 10, 20 dB
+        for (int i = 0; i < numMagLines; ++i) {
+            const double yPos = y + i * (height / (numMagLines - 1));
+            cairo_move_to(cr, x, yPos);
+            cairo_line_to(cr, x + width, yPos);
+        }
+        
+        // Draw vertical grid lines (frequency)
+        const double freqs[] = {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+        const int numFreqs = sizeof(freqs) / sizeof(freqs[0]);
+        
+        for (int i = 0; i < numFreqs; ++i) {
+            const double logMinFreq = log10(20.0);
+            const double logMaxFreq = log10(22050.0);
+            const double logFreq = log10(freqs[i]);
+            const double normalizedX = (logFreq - logMinFreq) / (logMaxFreq - logMinFreq);
+            const double xPos = x + normalizedX * width;
+            
+            cairo_move_to(cr, xPos, y);
+            cairo_line_to(cr, xPos, y + height);
+        }
+        
+        cairo_stroke(cr);
+    }
+
+    void drawFrequencyLabels(cairo_t* cr, int x, int y, int width, int height)
+    {
+        // Draw frequency labels
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 10);
+        
+        const double freqs[] = {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+        const int numFreqs = sizeof(freqs) / sizeof(freqs[0]);
+        
+        for (int i = 0; i < numFreqs; ++i) {
+            const double logMinFreq = log10(20.0);
+            const double logMaxFreq = log10(22050.0);
+            const double logFreq = log10(freqs[i]);
+            const double normalizedX = (logFreq - logMinFreq) / (logMaxFreq - logMinFreq);
+            const double xPos = x + normalizedX * width;
+            
+            // Format frequency label
+            std::string label;
+            if (freqs[i] >= 1000) {
+                label = std::to_string(static_cast<int>(freqs[i] / 1000)) + "k";
+            } else {
+                label = std::to_string(static_cast<int>(freqs[i]));
+            }
+            
+            cairo_text_extents_t extents;
+            cairo_text_extents(cr, label.c_str(), &extents);
+            
+            cairo_move_to(cr, xPos - extents.width / 2, y + height + 15);
+            cairo_show_text(cr, label.c_str());
+        }
+        
+        // X-axis label
+        cairo_set_font_size(cr, 12);
+        cairo_text_extents_t extents;
+        const char* xLabel = "Frequency (Hz)";
+        cairo_text_extents(cr, xLabel, &extents);
+        cairo_move_to(cr, x + (width - extents.width) / 2, y + height + 30);
+        cairo_show_text(cr, xLabel);
+    }
+    
+    void drawMagnitudeLabels(cairo_t* cr, int x, int y, int width, int height, double minDb, double maxDb)
+    {
+        // Draw magnitude labels
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 10);
+        
+        const int numLabels = 9; // -60, -50, -40, -30, -20, -10, 0, 10, 20 dB
+        for (int i = 0; i < numLabels; ++i) {
+            const double db = minDb + i * ((maxDb - minDb) / (numLabels - 1));
+            const double yPos = y + height - i * (height / (numLabels - 1));
+            
+            std::string label = std::to_string(static_cast<int>(db)) + " dB";
+            
+            cairo_text_extents_t extents;
+            cairo_text_extents(cr, label.c_str(), &extents);
+            
+            cairo_move_to(cr, x - extents.width - 5, yPos + extents.height / 2);
+            cairo_show_text(cr, label.c_str());
+        }
+        
+        // Y-axis label
+        cairo_set_font_size(cr, 12);
+        cairo_save(cr);
+        cairo_text_extents_t extents;
+        const char* yLabel = "Magnitude (dB)";
+        cairo_text_extents(cr, yLabel, &extents);
+        cairo_move_to(cr, x - 40, y + (height + extents.width) / 2);
+        cairo_rotate(cr, -M_PI / 2);
+        cairo_show_text(cr, yLabel);
+        cairo_restore(cr);
+    }
+    
+    void parseCoefficients(const char* str, std::vector<double>& coeffs) {
+        coeffs.clear();
+        
+        // Create a copy of the input string to tokenize
+        char inputCopy[1024]; // Ensure this is large enough
+        strncpy(inputCopy, str, sizeof(inputCopy) - 1);
+        inputCopy[sizeof(inputCopy) - 1] = '\0'; // Ensure null-termination
+        
+        // Tokenize the string using commas as delimiter
+        char* token = strtok(inputCopy, ",");
+        while (token != NULL) {
+            // Convert token to double, treating empty tokens as 0
+            double value = (token[0] == '\0') ? 0.0 : std::strtod(token, NULL);
+            coeffs.push_back(value);
+            
+            // Move to the next token
+            token = strtok(NULL, ",");
+        }
+    }
+
+    void updateTransferFunction() {
+        // Update the visualizer with current coefficients
+        fVisualizer.setNumerator(fNumerator);
+        fVisualizer.setDenominator(fDenominator);
+        
+        // Force a repaint to update the graph
+        repaint();
     }
 
     // we can use this if/when our resources are scalable, for now they are PNGs
@@ -130,6 +467,14 @@ protected:
 
         fButton->setSize(60*scaleFactor, 35*scaleFactor);
         fButton->setAbsolutePos(100*scaleFactor, 160*scaleFactor);
+    
+        // Update the response area
+        fResponseArea = DGL::Rectangle<int>(
+            50 * scaleFactor, 
+            150 * scaleFactor, 
+            700 * scaleFactor, 
+            200 * scaleFactor
+        );
     }
 
     void parameterChanged(const uint32_t index, const float value) override
@@ -162,8 +507,18 @@ protected:
 
     void setTF(std::string newText) override {
         std::cout << "setTF\n" << std::flush;
-        if (newText[0] == 'T') setState("topTF", &newText[1]);
-        else if (newText[0] == 'B') setState("bottomTF", &newText[1]);
+        if (newText[0] == 'T') {
+            const char* coeffStr = &newText[1];
+            parseCoefficients(coeffStr, fNumerator);
+            updateTransferFunction();
+            setState("topTF", &newText[1]);
+        }
+        else if (newText[0] == 'B') {
+            const char* coeffStr = &newText[1];
+            parseCoefficients(coeffStr, fDenominator);
+            updateTransferFunction();
+            setState("bottomTF", &newText[1]);
+        }
     }
 
     void stateChanged(const char*, const char*) {
