@@ -7,7 +7,7 @@
 # --------------------------------------------------------------
 # Project name, used for binaries
 
-NAME = d_cairoui
+NAME = cairo_ui
 CXXFLAGS += -I./dgl/src/pugl-upstream/include
 
 # --------------------------------------------------------------

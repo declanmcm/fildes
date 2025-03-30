@@ -369,7 +369,7 @@ public:
 
 Plugin* createPlugin()
 {
-    return new Fildes;
+    return new Fildes();
 }
 
 END_NAMESPACE_DISTRHO

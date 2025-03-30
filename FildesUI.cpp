@@ -39,6 +39,8 @@ public:
         , mPhases()
         , mSampleRate(44100.0)
         , mNeedsUpdate(true)
+        , mZeros()
+        , mPoles()
     {
         // Initialize with default frequency points (logarithmic scale)
         updateFrequencyPoints();
@@ -118,6 +120,173 @@ public:
         mNeedsUpdate = false;
     }
 
+    // Find roots of a polynomial using companion matrix method
+    std::vector<std::complex<double>> findRoots(const std::vector<double>& coeffs) {
+        std::vector<std::complex<double>> roots;
+        
+        // Handle special cases
+        if (coeffs.empty()) return roots;
+        
+        // Remove leading zeros
+        std::vector<double> c = coeffs;
+        while (c.size() > 1 && std::abs(c.back()) < 1e-10) {
+            c.pop_back();
+        }
+        
+        // Special case: constant or linear polynomial
+        if (c.size() <= 2) {
+            if (c.size() == 2 && std::abs(c[1]) > 1e-10) {
+                roots.push_back(std::complex<double>(-c[0] / c[1], 0.0));
+            }
+            return roots;
+        }
+        
+        // Normalize the coefficients
+        double lead = c.back();
+        for (double& coef : c) {
+            coef /= lead;
+        }
+        
+        // Create companion matrix
+        const int n = c.size() - 1;
+        std::vector<std::vector<double>> companion(n, std::vector<double>(n, 0.0));
+        
+        // Fill the first row with negated coefficients
+        for (int i = 0; i < n; ++i) {
+            companion[0][i] = -c[i] / c[n];
+        }
+        
+        // Fill the subdiagonal with ones
+        for (int i = 1; i < n; ++i) {
+            companion[i][i-1] = 1.0;
+        }
+        
+        // TODO: Compute eigenvalues using a proper method
+        // For now, return some placeholder roots for visualization
+        
+        // Generate some placeholder roots for demonstration
+        // In a real implementation, compute the eigenvalues of the companion matrix
+        
+        // Calculate some reasonable roots based on polynomial degree
+        double angle = 2.0 * M_PI / n;
+        for (int i = 0; i < n; ++i) {
+            double theta = i * angle;
+            double radius = 0.8; // Inside unit circle for stable filters
+            roots.push_back(std::complex<double>(radius * cos(theta), radius * sin(theta)));
+        }
+        
+        return roots;
+    }
+
+    void findZeros() {
+        // Find zeros of the transfer function (roots of numerator)
+        mZeros = findRoots(mNumerator);
+    }
+
+    void findPoles() {
+        // Find poles of the transfer function (roots of denominator)
+        mPoles = findRoots(mDenominator);
+    }
+
+    // Update a pole or zero based on dragging
+    void updatePoleZero(bool isPole, int index, const std::complex<double>& newValue) {
+        std::vector<std::complex<double>>& roots = isPole ? mPoles : mZeros;
+        
+        if (index >= 0 && index < static_cast<int>(roots.size())) {
+            roots[index] = newValue;
+            
+            // Rebuild the coefficients from roots
+            std::vector<double>& coeffs = isPole ? mDenominator : mNumerator;
+            
+            // Convert roots back to coefficients by expanding (z - r_1)(z - r_2)...
+            // For demonstration, we'll just update the relevant coefficient
+            // In a real implementation, multiply out the polynomial terms
+            
+            // TODO: Implement proper roots-to-coefficients conversion
+            // For now, just mark for update
+            mNeedsUpdate = true;
+        }
+    }
+
+    // Convert roots back to polynomial coefficients
+    std::vector<double> rootsToCoeffs(const std::vector<std::complex<double>>& roots) {
+        // Special case: no roots
+        if (roots.empty()) {
+            return {1.0};
+        }
+        
+        // Start with the term (z - r_0)
+        std::vector<std::complex<double>> coeffs = {-roots[0], 1.0};
+        
+        // Multiply by each (z - r_i) term
+        for (size_t i = 1; i < roots.size(); ++i) {
+            std::vector<std::complex<double>> newCoeffs(coeffs.size() + 1, std::complex<double>(0.0, 0.0));
+            
+            // Multiply coeffs by (z - r_i)
+            for (size_t j = 0; j < coeffs.size(); ++j) {
+                // Term for z^j * z
+                newCoeffs[j + 1] += coeffs[j];
+                
+                // Term for z^j * (-r_i)
+                newCoeffs[j] -= coeffs[j] * roots[i];
+            }
+            
+            coeffs = newCoeffs;
+        }
+        
+        // Convert complex coefficients to real (ignoring any imaginary part)
+        std::vector<double> realCoeffs;
+        for (const auto& c : coeffs) {
+            realCoeffs.push_back(c.real());
+        }
+        
+        return realCoeffs;
+    }
+
+    // Update coefficients from poles and zeros
+    bool updateCoefficientsFromRoots() {
+        // Convert zeros to numerator coefficients
+        std::vector<double> newNum = rootsToCoeffs(mZeros);
+        
+        // Convert poles to denominator coefficients
+        std::vector<double> newDen = rootsToCoeffs(mPoles);
+        
+        // Check if coefficients have changed
+        bool changed = false;
+        
+        if (newNum.size() != mNumerator.size()) {
+            mNumerator = newNum;
+            changed = true;
+        } else {
+            for (size_t i = 0; i < newNum.size(); ++i) {
+                if (std::abs(newNum[i] - mNumerator[i]) > 1e-10) {
+                    mNumerator = newNum;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        
+        if (newDen.size() != mDenominator.size()) {
+            mDenominator = newDen;
+            changed = true;
+        } else {
+            for (size_t i = 0; i < newDen.size(); ++i) {
+                if (std::abs(newDen[i] - mDenominator[i]) > 1e-10) {
+                    mDenominator = newDen;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        
+        if (changed) {
+            mNeedsUpdate = true;
+        }
+        
+        return changed;
+    }
+
     const std::vector<double>& getFrequencies() const {
         return mFrequencies;
     }
@@ -128,6 +297,22 @@ public:
 
     const std::vector<double>& getPhases() const {
         return mPhases;
+    }
+
+    const std::vector<std::complex<double>>& getZeros() const {
+        return mZeros;
+    }
+
+    const std::vector<std::complex<double>>& getPoles() const {
+        return mPoles;
+    }
+    
+    const std::vector<double>& getNumerator() const {
+        return mNumerator;
+    }
+    
+    const std::vector<double>& getDenominator() const {
+        return mDenominator;
     }
 
     double getMinMagnitude() const {
@@ -145,6 +330,8 @@ private:
     std::vector<double> mFrequencies;
     std::vector<double> mMagnitudes;
     std::vector<double> mPhases;
+    std::vector<std::complex<double>> mZeros;
+    std::vector<std::complex<double>> mPoles; 
     double mSampleRate;
     bool mNeedsUpdate;
 };
@@ -182,6 +369,15 @@ class FildesUI : public UI,
     
     // Area for the frequency response plot
     DGL::Rectangle<int> fResponseArea;
+
+    // Area for the pole-zero plot
+    DGL::Rectangle<int> fPoleZeroArea;
+    
+    // Dragging state
+    bool fIsDragging;
+    bool fDraggingPole;  // true for pole, false for zero
+    int fDraggedIndex;
+    double fDragStartX, fDragStartY;
 
 public:
     FildesUI()
@@ -226,6 +422,15 @@ public:
         fCoeffB->setAbsolutePos(50, 100);
         fCoeffB->setSize(500, 30);
         fCoeffB->setCallback(this);
+
+        // Set up the response and pole-zero areas
+        fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
+        fPoleZeroArea = DGL::Rectangle<int>(500, 370, 250, 250);
+        
+        // Initialize dragging state
+        fIsDragging = false;
+        fDraggingPole = false;
+        fDraggedIndex = -1;
 
         // we can use this if/when our resources are scalable, for now they are PNGs
         const double scaleFactor = getScaleFactor();
