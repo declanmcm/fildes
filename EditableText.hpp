@@ -98,18 +98,19 @@ public:
         virtual ~Callback() {}
         virtual void setTF(std::string newText) = 0;
         virtual void focus(EditableText* current) = 0;
+        virtual void setGain(std::string gainStr) = 0;
     };
 
-    explicit EditableText(SubWidget* const parent, bool type)
+    explicit EditableText(SubWidget* const parent, std::string type)
         : CairoSubWidget(parent),
           ButtonEventHandler(this),
           KeyboardEventHandler(this),
           fCallback(nullptr),
           fText(""),
           fIsFocused(false),
-          fCoeffCount(1)
+          fCoeffCount(1),
+          fType(type)
     {
-        fType = type;
         for (int i = 0; i < 100; i++) {
             fPoint[i] = false;
             fMinus[i] = false;
@@ -117,16 +118,16 @@ public:
         ButtonEventHandler::setCallback(this);
     }
 
-    explicit EditableText(TopLevelWidget* const parent, bool type)
+    explicit EditableText(TopLevelWidget* const parent, std::string type)
         : CairoSubWidget(parent),
           ButtonEventHandler(this),
           KeyboardEventHandler(this),
           fCallback(nullptr),
           fText(""),
           fIsFocused(false),
-          fCoeffCount(1)
+          fCoeffCount(1),
+          fType(type)
     {
-        fType = type;
         for (int i = 0; i < 100; i++) {
             fPoint[i] = false;
             fMinus[i] = false;
@@ -189,19 +190,6 @@ protected:
     bool onMouse(const MouseEvent& ev) override
     {
         std::cout << "onMouse: " << this << "\n" << std::flush;
-        // std::cout << "onMouse ET\n" << std::flush;
-        // std::cout << ev.pos.getX() << "\n" << std::flush;
-        // std::cout << ev.pos.getY() << "\n" << std::flush;
-        // std::cout << this->isFocused() << "\n" << std::flush;
-        // if (this->contains(ev.pos) && (!this->isFocused())) {
-        //     std::cout << "focused\n" << std::flush;
-        //     this->setFocused(true);
-        //     repaint();
-        // } else if (!(this->contains(ev.pos)) && this->isFocused()) {
-        //     std::cout << "notFocused\n" << std::flush;
-        //     this->setFocused(false);
-        //     repaint();
-        // }
         if (fCallback)
             fCallback->focus(nullptr);
         return ButtonEventHandler::mouseEvent(ev);
@@ -220,33 +208,57 @@ protected:
     {
         if (this->isFocused() && ev.press)
         {
-            if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1] && (!(std::strcmp(fText.c_str(), "")) || fText[fText.length() - 1] == ',')) || (ev.key == ',')) // Allow digits and decimal point
-            {
-                if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
-                if (ev.key == ',') {
-                    fPoint[++fCoeffCount - 1] = false;
-                    fMinus[++fCoeffCount - 1] = false;
+            if (fType == "G") {
+                if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1])) {
+                    if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
+                    fText += ev.key;
+                    repaint();
                 }
-                if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
-                fText += ev.key;
-                repaint();
+                else if (ev.key == 8 && !fText.empty()) // Handle backspace
+                {
+                    if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
+                    if (fText[fText.length() - 1] == ',') fCoeffCount--;
+                    if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
+                    fText.pop_back();
+                    repaint();
+                }
+                else if (ev.key == 13) // Use enter key to apply gain
+                {
+                    this->setFocused(false);
+                    fCallback->setGain(fText);
+                    fText = "";
+                    fPoint[fCoeffCount - 1] = false;
+                    repaint();
+                }
+            } else {
+                if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1] && (!(std::strcmp(fText.c_str(), "")) || fText[fText.length() - 1] == ',')) || (ev.key == ',')) // Allow digits and decimal point
+                {
+                    if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
+                    if (ev.key == ',') {
+                        fPoint[++fCoeffCount - 1] = false;
+                        fMinus[++fCoeffCount - 1] = false;
+                    }
+                    if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
+                    fText += ev.key;
+                    repaint();
+                }
+                else if (ev.key == 8 && !fText.empty()) // Handle backspace
+                {
+                    if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
+                    if (fText[fText.length() - 1] == ',') fCoeffCount--;
+                    if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
+                    fText.pop_back();
+                    repaint();
+                }
+                else if (ev.key == 13) // Enter key
+                {
+                    this->setFocused(false); // Lose focus on Enter
+                    repaint();
+                }
+                if (fCallback) {
+                    fCallback->setTF(fType + fText);
+                }
             }
-            else if (ev.key == 8 && !fText.empty()) // Handle backspace
-            {
-                if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
-                if (fText[fText.length() - 1] == ',') fCoeffCount--;
-                if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
-                fText.pop_back();
-                repaint();
-            }
-            else if (ev.key == 13) // Enter key
-            {
-                this->setFocused(false); // Lose focus on Enter
-                repaint();
-            }
-            std::string toSend = "B";
-            if (fType) toSend = "T";
-            fCallback->setTF(toSend.append(fText));
         }
         return KeyboardEventHandler::keyboardEvent(ev);
     }
@@ -258,7 +270,7 @@ private:
     bool fPoint[100];
     bool fMinus[100];
     int fCoeffCount;
-    bool fType;
+    std::string fType;
 };
 
 END_NAMESPACE_DGL
