@@ -255,7 +255,7 @@ protected:
                     this->setFocused(false); // Lose focus on Enter
                     repaint();
                 }
-                if (fCallback) {
+                if (fCallback && fType != " ") {
                     fCallback->setTF(fType + fText);
                 }
             }

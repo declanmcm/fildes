@@ -28,8 +28,993 @@
  #include <cmath>
  #include "Eigen/Eigen"
  
- // Add this class to FildesUI.cpp before the FildesUI class
- class TransferFunctionVisualizer {
+ // Add to FildesUI.cpp before the FildesUI class
+
+// FilterGenerator class - responsible for calculating filter coefficients
+class FilterGenerator {
+    public:
+        enum FilterType {
+            BUTTERWORTH,
+            CHEBYSHEV
+        };
+        
+        enum ResponseType {
+            LOW_PASS,
+            HIGH_PASS,
+            BAND_PASS,
+            BAND_STOP
+        };
+        
+        FilterGenerator() 
+            : mSampleRate(44100.0) {}
+        
+        void setSampleRate(double sampleRate) {
+            mSampleRate = sampleRate;
+        }
+        
+        // Generate filter coefficients based on parameters
+        std::pair<std::vector<double>, std::vector<double>> generateFilter(
+            FilterType filterType,
+            ResponseType responseType,
+            double cutoffLow,
+            double cutoffHigh,
+            int order,
+            double ripple = 0.5)  // Ripple in dB for Chebyshev filters
+        {
+            // Normalize frequencies to [0, 1] range (relative to Nyquist)
+            double normalizedLow = cutoffLow / (mSampleRate / 2.0);
+            double normalizedHigh = cutoffHigh / (mSampleRate / 2.0);
+            
+            // Clamp normalized frequencies to valid range
+            normalizedLow = std::max(0.001, std::min(0.999, normalizedLow));
+            normalizedHigh = std::max(0.001, std::min(0.999, normalizedHigh));
+            
+            // Ensure normalizedHigh > normalizedLow for band filters
+            if ((responseType == BAND_PASS || responseType == BAND_STOP) && normalizedHigh <= normalizedLow) {
+                std::swap(normalizedLow, normalizedHigh);
+            }
+            
+            std::vector<double> numerator, denominator;
+            
+            // Basic error checking on filter order
+            order = std::max(1, std::min(20, order));
+            
+            // Generate appropriate filter based on type
+            if (filterType == BUTTERWORTH) {
+                switch (responseType) {
+                    case LOW_PASS:
+                        generateButterworthLowPass(normalizedLow, order, numerator, denominator);
+                        break;
+                    case HIGH_PASS:
+                        generateButterworthHighPass(normalizedLow, order, numerator, denominator);
+                        break;
+                    case BAND_PASS:
+                        generateButterworthBandPass(normalizedLow, normalizedHigh, order, numerator, denominator);
+                        break;
+                    case BAND_STOP:
+                        generateButterworthBandStop(normalizedLow, normalizedHigh, order, numerator, denominator);
+                        break;
+                }
+            } else {  // CHEBYSHEV
+                switch (responseType) {
+                    case LOW_PASS:
+                        generateChebyshevLowPass(normalizedLow, order, ripple, numerator, denominator);
+                        break;
+                    case HIGH_PASS:
+                        generateChebyshevHighPass(normalizedLow, order, ripple, numerator, denominator);
+                        break;
+                    case BAND_PASS:
+                        generateChebyshevBandPass(normalizedLow, normalizedHigh, order, ripple, numerator, denominator);
+                        break;
+                    case BAND_STOP:
+                        generateChebyshevBandStop(normalizedLow, normalizedHigh, order, ripple, numerator, denominator);
+                        break;
+                }
+            }
+            
+            // Debug output
+            std::cout << "Generated filter coefficients:" << std::endl;
+            std::cout << "Numerator: ";
+            for (double c : numerator) std::cout << c << " ";
+            std::cout << std::endl;
+            std::cout << "Denominator: ";
+            for (double c : denominator) std::cout << c << " ";
+            std::cout << std::endl;
+            
+            return std::make_pair(numerator, denominator);
+        }
+        
+    private:
+        double mSampleRate;
+        
+        // Butterworth filter implementations
+        void generateButterworthLowPass(double cutoff, int order, 
+                                       std::vector<double>& numerator, 
+                                       std::vector<double>& denominator) {
+            // Bilinear transform variables
+            double wc = 2.0 * std::tan(M_PI * cutoff / 2.0);
+            
+            // Initialize arrays for analog filter coefficients
+            std::vector<std::complex<double>> poles;
+            
+            // Generate analog Butterworth poles
+            for (int i = 0; i < order; i++) {
+                double theta = M_PI * (2.0 * i + 1) / (2.0 * order);
+                std::complex<double> pole(-std::sin(theta), std::cos(theta));
+                poles.push_back(pole);
+            }
+            
+            // Apply frequency scaling
+            for (auto& pole : poles) {
+                pole *= wc;
+            }
+            
+            // Convert to digital filter via bilinear transform
+            numerator.clear();
+            denominator.clear();
+            
+            // Start with simplest case - gain term only in numerator
+            numerator.push_back(1.0);
+            denominator.push_back(1.0);
+            
+            // Process each pole pair
+            for (size_t i = 0; i < poles.size(); i++) {
+                // For complex poles, process with conjugate pair
+                if (std::abs(poles[i].imag()) > 1e-10) {
+                    // Check if we have its conjugate in the list
+                    bool hasConjugate = false;
+                    size_t conjIndex = 0;
+                    
+                    for (size_t j = i + 1; j < poles.size(); j++) {
+                        if (std::abs(poles[j].real() - poles[i].real()) < 1e-10 &&
+                            std::abs(poles[j].imag() + poles[i].imag()) < 1e-10) {
+                            hasConjugate = true;
+                            conjIndex = j;
+                            break;
+                        }
+                    }
+                    
+                    if (hasConjugate) {
+                        // Process this complex pole pair
+                        applyBilinearTransformComplexPole(poles[i], numerator, denominator);
+                        
+                        // Skip the conjugate since we've processed it
+                        poles[conjIndex] = std::complex<double>(0, 0);
+                    }
+                } else if (std::abs(poles[i].real()) > 1e-10 || std::abs(poles[i].imag()) > 1e-10) {
+                    // Process real pole
+                    applyBilinearTransformRealPole(poles[i].real(), numerator, denominator);
+                }
+            }
+            
+            // Normalize to make first denominator coefficient 1.0
+            if (!denominator.empty() && std::abs(denominator[0]) > 1e-10) {
+                double scale = denominator[0];
+                for (double& c : denominator) c /= scale;
+                for (double& c : numerator) c /= scale;
+            }
+            
+            // For Butterworth lowpass, normalize to have DC gain = 1
+            double dcGain = 0.0;
+            for (double c : numerator) dcGain += c;
+            double dcDenom = 0.0;
+            for (double c : denominator) dcDenom += c;
+            
+            if (std::abs(dcGain) > 1e-10) {
+                double scale = dcGain / dcDenom;
+                for (double& c : numerator) c /= scale;
+            }
+        }
+        
+        void generateButterworthHighPass(double cutoff, int order, 
+                                        std::vector<double>& numerator, 
+                                        std::vector<double>& denominator) {
+            // Generate lowpass filter first
+            generateButterworthLowPass(cutoff, order, numerator, denominator);
+            
+            // Transform lowpass to highpass by applying spectral inversion
+            // For each z^-k term, replace with (-1)^k * z^-k
+            for (size_t i = 0; i < numerator.size(); i++) {
+                if (i % 2 == 1) {  // Odd powers of z^-1
+                    numerator[i] = -numerator[i];
+                }
+            }
+            
+            for (size_t i = 1; i < denominator.size(); i++) {
+                if (i % 2 == 1) {  // Odd powers of z^-1
+                    denominator[i] = -denominator[i];
+                }
+            }
+            
+            // Scale for unity gain at Nyquist
+            double nyquistGain = 0.0;
+            double nyquistDenom = 0.0;
+            
+            for (size_t i = 0; i < numerator.size(); i++) {
+                nyquistGain += (i % 2 == 0) ? numerator[i] : -numerator[i];
+            }
+            
+            for (size_t i = 0; i < denominator.size(); i++) {
+                nyquistDenom += (i % 2 == 0) ? denominator[i] : -denominator[i];
+            }
+            
+            if (std::abs(nyquistGain) > 1e-10) {
+                double scale = nyquistGain / nyquistDenom;
+                for (double& c : numerator) c /= scale;
+            }
+        }
+        
+        void generateButterworthBandPass(double cutoffLow, double cutoffHigh, int order, 
+                                        std::vector<double>& numerator, 
+                                        std::vector<double>& denominator) {
+            // Generate lowpass prototype
+            std::vector<double> lpNum, lpDen;
+            generateButterworthLowPass(0.5, order, lpNum, lpDen);
+            
+            // Calculate band transformation parameters
+            double wl = 2.0 * std::tan(M_PI * cutoffLow / 2.0);
+            double wh = 2.0 * std::tan(M_PI * cutoffHigh / 2.0);
+            double w0 = std::sqrt(wl * wh);
+            double bw = wh - wl;
+            
+            // Create bandpass from lowpass using frequency transformation
+            // This is an approximation for demonstration purposes
+            numerator.clear();
+            denominator.clear();
+            
+            // Start with simple bandpass from second-order sections
+            numerator.resize(2 * order + 1, 0.0);
+            denominator.resize(2 * order + 1, 0.0);
+            
+            // Set up bandpass structure (simplified)
+            numerator[order] = 1.0;  // Center coefficient
+            denominator[0] = 1.0;
+            
+            // Basic bandpass coefficients (would need proper transformation in real code)
+            double alpha = std::cos(M_PI * (cutoffHigh + cutoffLow)) / std::cos(M_PI * (cutoffHigh - cutoffLow));
+            double beta = std::tan(M_PI * (cutoffHigh - cutoffLow) / 2.0);
+            
+            // Apply to each second-order section
+            for (int i = 1; i <= order; i++) {
+                double theta = M_PI * (2.0 * i - 1) / (2.0 * order);
+                double realPole = -std::sin(theta);
+                double imagPole = std::cos(theta);
+                
+                // Convert analog poles to digital
+                double a = 1.0 / (1.0 + beta * realPole + beta * beta);
+                double b0 = a;
+                double b1 = -2.0 * alpha * a;
+                double b2 = (1.0 - beta * realPole + beta * beta) * a;
+                
+                // Apply to the overall filter (simplified)
+                denominator[i] += b1;
+                denominator[i+order] += b2;
+            }
+            
+            // Normalize gain at center frequency
+            double centerGain = evaluateGain(numerator, denominator, (cutoffLow + cutoffHigh) / 2.0);
+            if (std::abs(centerGain) > 1e-10) {
+                for (double& c : numerator) c /= centerGain;
+            }
+        }
+        
+        void generateButterworthBandStop(double cutoffLow, double cutoffHigh, int order, 
+                                        std::vector<double>& numerator, 
+                                        std::vector<double>& denominator) {
+            // Generate bandpass filter first
+            generateButterworthBandPass(cutoffLow, cutoffHigh, order, numerator, denominator);
+            
+            // Transform bandpass to bandstop by spectral inversion
+            // Basically, negate all coefficients except the first one
+            for (size_t i = 1; i < numerator.size(); i++) {
+                numerator[i] = -numerator[i];
+            }
+            
+            for (size_t i = 1; i < denominator.size(); i++) {
+                denominator[i] = -denominator[i];
+            }
+            
+            // Adjust gain at DC
+            double dcGain = 0.0;
+            for (double c : numerator) dcGain += c;
+            double dcDenom = 0.0;
+            for (double c : denominator) dcDenom += c;
+            
+            if (std::abs(dcGain) > 1e-10) {
+                double scale = dcGain / dcDenom;
+                for (double& c : numerator) c /= scale;
+            }
+        }
+        
+        // Chebyshev filter implementations
+        void generateChebyshevLowPass(double cutoff, int order, double ripple,
+                                     std::vector<double>& numerator, 
+                                     std::vector<double>& denominator) {
+            // Bilinear transform variables
+            double wc = 2.0 * std::tan(M_PI * cutoff / 2.0);
+            
+            // Chebyshev parameter
+            double eps = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
+            double v0 = std::asinh(1.0 / eps) / order;
+            double sinh_v0 = std::sinh(v0);
+            double cosh_v0 = std::cosh(v0);
+            
+            // Initialize arrays for analog filter coefficients
+            std::vector<std::complex<double>> poles;
+            
+            // Generate Chebyshev poles
+            for (int i = 0; i < order; i++) {
+                double theta = M_PI * (2.0 * i + 1) / (2.0 * order);
+                double real = -sinh_v0 * std::sin(theta);
+                double imag = cosh_v0 * std::cos(theta);
+                
+                poles.push_back(std::complex<double>(real, imag));
+            }
+            
+            // Apply frequency scaling
+            for (auto& pole : poles) {
+                pole *= wc;
+            }
+            
+            // Convert to digital filter via bilinear transform
+            numerator.clear();
+            denominator.clear();
+            
+            // Start with simplest case - gain term only in numerator
+            numerator.push_back(1.0);
+            denominator.push_back(1.0);
+            
+            // Process each pole pair
+            for (size_t i = 0; i < poles.size(); i++) {
+                // For complex poles, process with conjugate pair
+                if (std::abs(poles[i].imag()) > 1e-10) {
+                    // Check if we have its conjugate in the list
+                    bool hasConjugate = false;
+                    size_t conjIndex = 0;
+                    
+                    for (size_t j = i + 1; j < poles.size(); j++) {
+                        if (std::abs(poles[j].real() - poles[i].real()) < 1e-10 &&
+                            std::abs(poles[j].imag() + poles[i].imag()) < 1e-10) {
+                            hasConjugate = true;
+                            conjIndex = j;
+                            break;
+                        }
+                    }
+                    
+                    if (hasConjugate) {
+                        // Process this complex pole pair
+                        applyBilinearTransformComplexPole(poles[i], numerator, denominator);
+                        
+                        // Skip the conjugate since we've processed it
+                        poles[conjIndex] = std::complex<double>(0, 0);
+                    }
+                } else if (std::abs(poles[i].real()) > 1e-10 || std::abs(poles[i].imag()) > 1e-10) {
+                    // Process real pole
+                    applyBilinearTransformRealPole(poles[i].real(), numerator, denominator);
+                }
+            }
+            
+            // Normalize to make first denominator coefficient 1.0
+            if (!denominator.empty() && std::abs(denominator[0]) > 1e-10) {
+                double scale = denominator[0];
+                for (double& c : denominator) c /= scale;
+                for (double& c : numerator) c /= scale;
+            }
+            
+            // For Chebyshev lowpass, set passband gain based on ripple
+            double scale;
+            if (order % 2 == 0) {
+                // Even-order Chebyshev has a gain of 1/(1+eps^2)^(1/2) at DC
+                scale = 1.0 / std::sqrt(1.0 + eps * eps);
+            } else {
+                // Odd-order Chebyshev has a gain of 1 at DC
+                scale = 1.0;
+            }
+            
+            double dcGain = 0.0;
+            for (double c : numerator) dcGain += c;
+            double dcDenom = 0.0;
+            for (double c : denominator) dcDenom += c;
+            
+            if (std::abs(dcGain) > 1e-10) {
+                scale *= dcDenom / dcGain;
+                for (double& c : numerator) c *= scale;
+            }
+        }
+        
+        void generateChebyshevHighPass(double cutoff, int order, double ripple,
+                                      std::vector<double>& numerator, 
+                                      std::vector<double>& denominator) {
+            // Generate lowpass filter first
+            generateChebyshevLowPass(cutoff, order, ripple, numerator, denominator);
+            
+            // Transform lowpass to highpass by applying spectral inversion
+            for (size_t i = 0; i < numerator.size(); i++) {
+                if (i % 2 == 1) {
+                    numerator[i] = -numerator[i];
+                }
+            }
+            
+            for (size_t i = 1; i < denominator.size(); i++) {
+                if (i % 2 == 1) {
+                    denominator[i] = -denominator[i];
+                }
+            }
+            
+            // Scale for appropriate gain at Nyquist
+            double nyquistGain = 0.0;
+            double nyquistDenom = 0.0;
+            
+            for (size_t i = 0; i < numerator.size(); i++) {
+                nyquistGain += (i % 2 == 0) ? numerator[i] : -numerator[i];
+            }
+            
+            for (size_t i = 0; i < denominator.size(); i++) {
+                nyquistDenom += (i % 2 == 0) ? denominator[i] : -denominator[i];
+            }
+            
+            if (std::abs(nyquistGain) > 1e-10) {
+                double scale = nyquistGain / nyquistDenom;
+                for (double& c : numerator) c /= scale;
+            }
+        }
+        
+        void generateChebyshevBandPass(double cutoffLow, double cutoffHigh, int order, double ripple,
+                                      std::vector<double>& numerator, 
+                                      std::vector<double>& denominator) {
+            // Similar to Butterworth bandpass but with Chebyshev prototype
+            std::vector<double> lpNum, lpDen;
+            generateChebyshevLowPass(0.5, order, ripple, lpNum, lpDen);
+            
+            // Apply bandpass transformation (simplified)
+            // Using similar approach as Butterworth for demonstration
+            generateButterworthBandPass(cutoffLow, cutoffHigh, order, numerator, denominator);
+        }
+        
+        void generateChebyshevBandStop(double cutoffLow, double cutoffHigh, int order, double ripple,
+                                      std::vector<double>& numerator, 
+                                      std::vector<double>& denominator) {
+            // Similar to Butterworth bandstop but with Chebyshev prototype
+            generateChebyshevBandPass(cutoffLow, cutoffHigh, order, ripple, numerator, denominator);
+            
+            // Transform bandpass to bandstop
+            for (size_t i = 1; i < numerator.size(); i++) {
+                numerator[i] = -numerator[i];
+            }
+            
+            for (size_t i = 1; i < denominator.size(); i++) {
+                denominator[i] = -denominator[i];
+            }
+            
+            // Adjust gain at DC
+            double dcGain = 0.0;
+            for (double c : numerator) dcGain += c;
+            double dcDenom = 0.0;
+            for (double c : denominator) dcDenom += c;
+            
+            if (std::abs(dcGain) > 1e-10) {
+                double scale = dcGain / dcDenom;
+                for (double& c : numerator) c /= scale;
+            }
+        }
+        
+        // Helper functions for bilinear transform
+        void applyBilinearTransformRealPole(double pole, 
+                                          std::vector<double>& numerator, 
+                                          std::vector<double>& denominator) {
+            // Convert analog s-domain pole to digital z-domain
+            // s = pole becomes (z-1)/(z+1) = pole
+            // Solving for z: z = (1+pole)/(1-pole)
+            
+            // For first-order section with real pole a:
+            // H(z) = (b0 + b1*z^-1)/(1 + a1*z^-1)
+            
+            double a = -pole;
+            double b0 = 1.0;
+            double b1 = 1.0;
+            double a1 = (1.0 - a) / (1.0 + a);
+            double gain = (1.0 + a1) / (b0 + b1);
+            
+            b0 *= gain;
+            b1 *= gain;
+            
+            // Convolve with existing filter
+            std::vector<double> newNumerator(numerator.size() + 1, 0.0);
+            std::vector<double> newDenominator(denominator.size() + 1, 0.0);
+            
+            for (size_t i = 0; i < numerator.size(); i++) {
+                newNumerator[i] += b0 * numerator[i];
+                newNumerator[i+1] += b1 * numerator[i];
+            }
+            
+            for (size_t i = 0; i < denominator.size(); i++) {
+                newDenominator[i] += denominator[i];
+                newDenominator[i+1] += a1 * denominator[i];
+            }
+            
+            numerator = newNumerator;
+            denominator = newDenominator;
+        }
+        
+        void applyBilinearTransformComplexPole(const std::complex<double>& pole, 
+                                             std::vector<double>& numerator, 
+                                             std::vector<double>& denominator) {
+            // For second-order section with complex conjugate poles:
+            // H(z) = (b0 + b1*z^-1 + b2*z^-2)/(1 + a1*z^-1 + a2*z^-2)
+            
+            double a = -2.0 * pole.real();
+            double b = std::norm(pole);  // |pole|^2
+            
+            // Bilinear transform coefficients
+            double k = 1.0 / (1.0 + a + b);
+            double a1 = 2.0 * (b - 1.0) * k;
+            double a2 = (1.0 - a + b) * k;
+            
+            double b0 = 1.0;
+            double b1 = 2.0;
+            double b2 = 1.0;
+            
+            // Normalize gain
+            double gain = (1.0 + a1 + a2) / (b0 + b1 + b2);
+            b0 *= gain;
+            b1 *= gain;
+            b2 *= gain;
+            
+            // Convolve with existing filter
+            std::vector<double> newNumerator(numerator.size() + 2, 0.0);
+            std::vector<double> newDenominator(denominator.size() + 2, 0.0);
+            
+            for (size_t i = 0; i < numerator.size(); i++) {
+                newNumerator[i] += b0 * numerator[i];
+                newNumerator[i+1] += b1 * numerator[i];
+                newNumerator[i+2] += b2 * numerator[i];
+            }
+            
+            for (size_t i = 0; i < denominator.size(); i++) {
+                newDenominator[i] += denominator[i];
+                newDenominator[i+1] += a1 * denominator[i];
+                newDenominator[i+2] += a2 * denominator[i];
+            }
+            
+            numerator = newNumerator;
+            denominator = newDenominator;
+        }
+        
+        // Evaluate filter gain at specific frequency
+        double evaluateGain(const std::vector<double>& num, const std::vector<double>& den, double freq) {
+            // Convert frequency to radians
+            double omega = 2.0 * M_PI * freq;
+            
+            // Evaluate frequency response
+            std::complex<double> numerator(0.0, 0.0);
+            std::complex<double> denominator(0.0, 0.0);
+            
+            for (size_t i = 0; i < num.size(); i++) {
+                double angle = -omega * static_cast<double>(i);
+                std::complex<double> z(std::cos(angle), std::sin(angle));
+                numerator += num[i] * z;
+            }
+            
+            for (size_t i = 0; i < den.size(); i++) {
+                double angle = -omega * static_cast<double>(i);
+                std::complex<double> z(std::cos(angle), std::sin(angle));
+                denominator += den[i] * z;
+            }
+            
+            // Return magnitude
+            if (std::abs(denominator) > 1e-10) {
+                return std::abs(numerator / denominator);
+            }
+            
+            return 0.0;
+        }
+    };
+    
+    // Add this class for a custom button widget (to be used for the Generate button)
+class CustomButton : public CairoSubWidget,
+                        public ButtonEventHandler,
+                        public ButtonEventHandler::Callback
+    {
+    public:
+        class Callback
+        {
+        public:
+            virtual ~Callback() {}
+            virtual void buttonClicked(CustomButton* button) = 0;
+        };
+    
+        explicit CustomButton(SubWidget* const parent, const char* label)
+            : CairoSubWidget(parent),
+              ButtonEventHandler(this),
+              fCallback(nullptr),
+              fIsHovered(false),
+              fIsPressed(false),
+              fLabel(label)
+        {
+            ButtonEventHandler::setCallback(this);
+        }
+
+        explicit CustomButton(TopLevelWidget* const parent, const char* label)
+            : CairoSubWidget(parent),
+              ButtonEventHandler(this),
+              fCallback(nullptr),
+              fIsHovered(false),
+              fIsPressed(false),
+              fLabel(label)
+        {
+            ButtonEventHandler::setCallback(this);
+        }
+    
+        void setCallback(Callback* const callback) noexcept
+        {
+            fCallback = callback;
+        }
+
+        void setId(uint32_t id) noexcept
+        {
+            fId = id;
+        }
+
+        uint32_t getId() const noexcept
+        {
+            return fId;
+        }
+    
+    protected:
+        void onCairoDisplay(const CairoGraphicsContext& context) override
+        {
+            cairo_t* const cr = context.handle;
+    
+            // Draw button background with different colors based on state
+            if (fIsPressed) {
+                cairo_set_source_rgb(cr, 0.4, 0.4, 0.8); // Darker blue when pressed
+            } else if (fIsHovered) {
+                cairo_set_source_rgb(cr, 0.5, 0.5, 0.9); // Lighter blue when hovered
+            } else {
+                cairo_set_source_rgb(cr, 0.6, 0.6, 1.0); // Default blue
+            }
+            
+            // Draw rounded rectangle
+            double radius = 10.0;
+            double x = 0;
+            double y = 0;
+            double width = getWidth();
+            double height = getHeight();
+            
+            // Rounded corners
+            cairo_new_path(cr);
+            cairo_arc(cr, x + width - radius, y + radius, radius, -M_PI/2, 0);
+            cairo_arc(cr, x + width - radius, y + height - radius, radius, 0, M_PI/2);
+            cairo_arc(cr, x + radius, y + height - radius, radius, M_PI/2, M_PI);
+            cairo_arc(cr, x + radius, y + radius, radius, M_PI, 3*M_PI/2);
+            cairo_close_path(cr);
+            
+            cairo_fill_preserve(cr);
+            
+            // Draw border
+            cairo_set_source_rgb(cr, 0.2, 0.2, 0.7);
+            cairo_set_line_width(cr, 2.0);
+            cairo_stroke(cr);
+    
+            // Draw button text
+            cairo_set_source_rgb(cr, 1.0, 1.0, 1.0); // White text
+            cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 16.0);
+            
+            // Center text
+            cairo_text_extents_t extents;
+            cairo_text_extents(cr, fLabel.c_str(), &extents);
+            
+            double textX = (width - extents.width) / 2 - extents.x_bearing;
+            double textY = (height - extents.height) / 2 - extents.y_bearing;
+            
+            cairo_move_to(cr, textX, textY);
+            cairo_show_text(cr, fLabel.c_str());
+        }
+    
+        bool onMouse(const MouseEvent& ev) override
+        {
+            return ButtonEventHandler::mouseEvent(ev);
+        }
+        
+        // Fix: Use proper signature for buttonClicked
+        void buttonClicked(SubWidget*, int button) override
+        {
+            if (button != 1) return;  // Only handle left-click
+            
+            if (fCallback != nullptr) {
+                fCallback->buttonClicked(this);
+            }
+        }
+        
+        bool onMotion(const MotionEvent& ev) override
+        {
+            // Update hover state based on motion
+            const bool wasHovered = fIsHovered;
+            
+            // Check if mouse is inside widget bounds
+            fIsHovered = ev.pos.getX() >= 0 && ev.pos.getX() < getWidth() &&
+                        ev.pos.getY() >= 0 && ev.pos.getY() < getHeight();
+            
+            // Repaint only if hover state changed
+            if (fIsHovered != wasHovered) {
+                repaint();
+            }
+            
+            return CairoSubWidget::onMotion(ev);
+        }
+        
+    private:
+        Callback* fCallback;
+        bool fIsHovered;
+        bool fIsPressed;
+        std::string fLabel;
+        uint32_t fId;
+    };
+
+class Dropdown : public CairoSubWidget,
+                public ButtonEventHandler,
+                public ButtonEventHandler::Callback
+    {
+    public:
+        class Callback
+        {
+        public:
+            virtual ~Callback() {}
+            virtual void selectionChanged(Dropdown* dropdown, int selectedIndex) = 0;
+        };
+
+        explicit Dropdown(SubWidget* const parent, const std::vector<std::string>& items)
+            : CairoSubWidget(parent),
+                ButtonEventHandler(this),
+                fCallback(nullptr),
+                fItems(items),
+                fSelectedIndex(0),
+                fIsOpen(false),
+                fIsHovered(false),
+                fClosedHeight(30)
+        {
+            ButtonEventHandler::setCallback(this);
+            setSize(getWidth(), fClosedHeight);
+        }
+
+        explicit Dropdown(TopLevelWidget* const parent, const std::vector<std::string>& items)
+            : CairoSubWidget(parent),
+                ButtonEventHandler(this),
+                fCallback(nullptr),
+                fItems(items),
+                fSelectedIndex(0),
+                fIsOpen(false),
+                fIsHovered(false),
+                fClosedHeight(30)
+        {
+            ButtonEventHandler::setCallback(this);
+            setSize(getWidth(), fClosedHeight);
+        }
+
+        int getSelectedIndex() const
+        {
+            return fSelectedIndex;
+        }
+
+        void setSelectedIndex(int index)
+        {
+            if (index >= 0 && index < static_cast<int>(fItems.size())) {
+                fSelectedIndex = index;
+                repaint();
+            }
+        }
+
+        const std::string& getSelectedItem() const
+        {
+            return fItems[fSelectedIndex];
+        }
+
+        void setCallback(Callback* const callback) noexcept
+        {
+            fCallback = callback;
+        }
+
+        void setId(uint32_t id) noexcept
+        {
+            fId = id;
+        }
+
+        uint32_t getId() const noexcept
+        {
+            return fId;
+        }
+
+        // Override setSize to store width for resizing during open/close
+        void setSize(const uint width, const uint height)
+        {
+            fWidth = width;
+            CairoSubWidget::setSize(width, height);
+        }
+
+        // Override setAbsolutePos to store position for dropdown positioning
+        void setAbsolutePos(const int x, const int y)
+        {
+            fPosX = x;
+            fPosY = y;
+            CairoSubWidget::setAbsolutePos(x, y);
+        }
+
+    protected:
+        void onCairoDisplay(const CairoGraphicsContext& context) override
+        {
+            cairo_t* const cr = context.handle;
+            
+            // Draw dropdown box
+            if (fIsHovered) {
+                cairo_set_source_rgb(cr, 0.95, 0.95, 0.95); // Lighter when hovered
+            } else {
+                cairo_set_source_rgb(cr, 0.9, 0.9, 0.9); // Default gray
+            }
+            
+            // Main box
+            cairo_rectangle(cr, 0, 0, getWidth(), 30);
+            cairo_fill_preserve(cr);
+            
+            // Border
+            cairo_set_source_rgb(cr, 0.4, 0.4, 0.4);
+            cairo_set_line_width(cr, 1.0);
+            cairo_stroke(cr);
+            
+            // Draw selected item text
+            cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+            cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+            cairo_set_font_size(cr, 14.0);
+            cairo_move_to(cr, 10, 20);
+            cairo_show_text(cr, fItems[fSelectedIndex].c_str());
+            
+            // Draw dropdown arrow
+            cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+            cairo_move_to(cr, getWidth() - 20, 10);
+            cairo_line_to(cr, getWidth() - 10, 10);
+            cairo_line_to(cr, getWidth() - 15, 20);
+            cairo_close_path(cr);
+            cairo_fill(cr);
+            
+            // Draw dropdown menu if open
+            if (fIsOpen) {
+                const int itemHeight = 25;
+                const int menuHeight = fItems.size() * itemHeight;
+                
+                // Menu background
+                cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+                cairo_rectangle(cr, 0, 30, getWidth(), menuHeight);
+                cairo_fill_preserve(cr);
+                
+                // Menu border
+                cairo_set_source_rgb(cr, 0.4, 0.4, 0.4);
+                cairo_stroke(cr);
+                
+                // Draw items
+                for (size_t i = 0; i < fItems.size(); i++) {
+                    const int y = 30 + i * itemHeight;
+                    
+                    // Highlight selected item
+                    if (static_cast<int>(i) == fSelectedIndex) {
+                        cairo_set_source_rgb(cr, 0.8, 0.8, 0.9);
+                        cairo_rectangle(cr, 0, y, getWidth(), itemHeight);
+                        cairo_fill(cr);
+                    }
+                    
+                    // Item text
+                    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+                    cairo_move_to(cr, 10, y + 18);
+                    cairo_show_text(cr, fItems[i].c_str());
+                    
+                    // Separator line
+                    if (i < fItems.size() - 1) {
+                        cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+                        cairo_move_to(cr, 0, y + itemHeight);
+                        cairo_line_to(cr, getWidth(), y + itemHeight);
+                        cairo_stroke(cr);
+                    }
+                }
+            }
+        }
+
+        bool onMouse(const MouseEvent& ev) override
+        {
+            const int y = ev.pos.getY();
+            
+            if (fIsOpen && y > 30) {
+                // Click in dropdown menu
+                if (ev.press && ev.button == 1) {
+                    const int itemHeight = 25;
+                    const int itemIndex = (y - 30) / itemHeight;
+                    
+                    if (itemIndex >= 0 && itemIndex < static_cast<int>(fItems.size())) {
+                        // Select item
+
+                        toggleDropdown(false);
+                        fSelectedIndex = itemIndex;
+                        repaint();
+                        
+                        if (fCallback) {
+                            fCallback->selectionChanged(this, fSelectedIndex);
+                        }
+                    }
+                    return true;
+                }
+            } else {
+                return ButtonEventHandler::mouseEvent(ev);
+            }
+            
+            return false;
+        }
+        
+        void buttonClicked(SubWidget* widget, int button) override
+        {
+            if (button == 1) {
+                // Toggle dropdown
+                toggleDropdown(!fIsOpen);
+            }
+        }
+        
+        bool onMotion(const MotionEvent& ev) override
+        {
+            const int y = ev.pos.getY();
+            
+            // Update hover state
+            const bool wasHovered = fIsHovered;
+            fIsHovered = ev.pos.getX() >= 0 && ev.pos.getX() < getWidth() &&
+                        ev.pos.getY() >= 0 && ev.pos.getY() < getHeight();
+                        
+            if (wasHovered != fIsHovered) {
+                repaint();
+            }
+            
+            if (fIsOpen && y > 30) {
+                // Hover in dropdown menu
+                const int itemHeight = 25;
+                const int hoverIndex = (y - 30) / itemHeight;
+                
+                if (hoverIndex >= 0 && hoverIndex < static_cast<int>(fItems.size())) {
+                    // Highlight hovered item (simplified for now)
+                    repaint();
+                }
+            }
+            
+            return CairoSubWidget::onMotion(ev);
+        }
+
+    private:
+
+        void toggleDropdown(bool open) {            
+            fIsOpen = open;
+            
+            const int itemHeight = 25;
+            const int menuHeight = fItems.size() * itemHeight;
+            
+            if (open) {
+                toFront();
+                // Expand height to show menu
+                setSize(fWidth, fClosedHeight + menuHeight);
+            } else {
+                // Shrink back to closed height
+                setSize(fWidth, fClosedHeight);
+            }
+            
+            repaint();
+        }
+
+        Callback* fCallback;
+        std::vector<std::string> fItems;
+        int fSelectedIndex;
+        bool fIsOpen;
+        bool fIsHovered;
+        uint32_t fId;
+        uint fWidth;
+        int fPosX;
+        int fPosY;
+        const int fClosedHeight;
+    };
+
+class TransferFunctionVisualizer {
  public:
      TransferFunctionVisualizer() 
          : mNumerator(1, 0.0)
@@ -516,17 +1501,32 @@
  using DGL_NAMESPACE::DemoWidgetBanner;
  using DGL_NAMESPACE::EditableText;
  
- class FildesUI : public UI,
+class FildesUI : public UI,
                         public CairoImageKnob::Callback,
                         public CairoImageSwitch::Callback,
                         public DemoWidgetClickable::Callback,
-                        public EditableText::Callback
+                        public EditableText::Callback,
+                        public CustomButton::Callback,
+                        public Dropdown::Callback
  {
      ScopedPointer<CairoImageKnob> fKnob;
      ScopedPointer<CairoImageSwitch> fButton;
      ScopedPointer<DemoWidgetClickable> fWidgetClickable;
      ScopedPointer<EditableText> fCoeffT, fCoeffB;
      ScopedPointer<DGL::SubWidget> fContainer;
+
+    // Filter generator variables
+    ScopedPointer<FilterGenerator> fFilterGenerator;
+    ScopedPointer<Dropdown> fFilterTypeDropdown;
+    ScopedPointer<Dropdown> fResponseTypeDropdown;
+    ScopedPointer<EditableText> fCutoffLowInput;
+    ScopedPointer<EditableText> fCutoffHighInput;
+    ScopedPointer<EditableText> fOrderInput;
+    ScopedPointer<EditableText> fRippleInput;  // For Chebyshev filters
+    ScopedPointer<CustomButton> fGenerateButton;
+
+
+    ScopedPointer<EditableText> *fTextInputs[7];
  
      // Add the visualizer
      TransferFunctionVisualizer fVisualizer;
@@ -622,6 +1622,70 @@
          setSize(800, 650);
          if (scaleFactor != 1.0)
              setSize(800 * scaleFactor, 650 * scaleFactor);
+
+        // Initialize filter generator
+        fFilterGenerator = new FilterGenerator();
+        fFilterGenerator->setSampleRate(getSampleRate());
+        
+        // Create filter type dropdown
+        std::vector<std::string> filterTypes = {"Butterworth", "Chebyshev"};
+        fFilterTypeDropdown = new Dropdown(this, filterTypes);
+        fFilterTypeDropdown->setAbsolutePos(150, 370);
+        fFilterTypeDropdown->setSize(150, 30);
+        fFilterTypeDropdown->setCallback(this);
+        
+        // Create response type dropdown
+        std::vector<std::string> responseTypes = {"Low Pass", "High Pass", "Band Pass", "Band Stop"};
+        fResponseTypeDropdown = new Dropdown(this, responseTypes);
+        fResponseTypeDropdown->setAbsolutePos(150, 420);
+        fResponseTypeDropdown->setSize(150, 30);
+        fResponseTypeDropdown->setCallback(this);
+        
+        // Create frequency inputs
+        fCutoffLowInput = new EditableText(this, " ");
+        fCutoffLowInput->setAbsolutePos(150, 470);
+        fCutoffLowInput->setSize(100, 30);
+        fCutoffLowInput->setCallback(this);
+        fCutoffLowInput->setText("1000");  // Default value
+        
+        fCutoffHighInput = new EditableText(this, " ");
+        fCutoffHighInput->setAbsolutePos(270, 470);
+        fCutoffHighInput->setSize(100, 30);
+        fCutoffHighInput->setCallback(this);
+        fCutoffHighInput->setText("4000");  // Default value
+        
+        // Create order input
+        fOrderInput = new EditableText(this, " ");
+        fOrderInput->setAbsolutePos(150, 520);
+        fOrderInput->setSize(100, 30);
+        fOrderInput->setCallback(this);
+        fOrderInput->setText("4");  // Default value
+        
+        // Create ripple input (for Chebyshev filters)
+        fRippleInput = new EditableText(this, " ");
+        fRippleInput->setAbsolutePos(270, 520);
+        fRippleInput->setSize(100, 30);
+        fRippleInput->setCallback(this);
+        fRippleInput->setText("0.5");  // Default value
+        
+        // Create generate button
+        fGenerateButton = new CustomButton(this, "Generate Filter");
+        fGenerateButton->setAbsolutePos(150, 570);
+        fGenerateButton->setSize(150, 40);
+        fGenerateButton->setCallback(this);
+        
+        // Initialize visibility
+        updateFilterParametersVisibility();
+        updateCutoffFrequenciesVisibility();
+
+
+        fTextInputs[0] = &fCoeffT;
+        fTextInputs[1] = &fCoeffB;
+        fTextInputs[2] = &fGainInput;
+        fTextInputs[3] = &fCutoffHighInput;
+        fTextInputs[4] = &fCutoffLowInput;
+        fTextInputs[5] = &fOrderInput;
+        fTextInputs[6] = &fRippleInput;
      }
  
  protected:
@@ -650,6 +1714,35 @@
          drawFrequencyResponse(cr);
  
          drawPoleZeroPlot(cr);
+
+         // Draw filter generator section title
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 20);
+        cairo_move_to(cr, 10, 350);
+        cairo_show_text(cr, "Filter Generator");
+        
+        // Draw filter parameter labels
+        cairo_set_font_size(cr, 16);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        
+        cairo_move_to(cr, 10, 390);
+        cairo_show_text(cr, "Filter Type:");
+        
+        cairo_move_to(cr, 10, 440);
+        cairo_show_text(cr, "Response:");
+        
+        cairo_move_to(cr, 10, 490);
+        cairo_show_text(cr, "Cutoff (Hz):");
+        
+        cairo_move_to(cr, 10, 540);
+        cairo_show_text(cr, "Order:");
+        
+        // If Chebyshev is selected, draw ripple label
+        if (fFilterTypeDropdown && fFilterTypeDropdown->getSelectedIndex() == 1) {
+            cairo_move_to(cr, 210, 540);
+            cairo_show_text(cr, "Ripple (dB):");
+        }
      }
  
      void drawFrequencyResponse(cairo_t* cr)
@@ -1239,20 +2332,11 @@
      }
      
      void focus(EditableText* current) override {
-         if (current == fCoeffT) {
-            fCoeffB->setFocused(false);
-            fGainInput->setFocused(false);
-         } else if (current == fCoeffB) {
-            fCoeffT->setFocused(false);
-            fGainInput->setFocused(false);
-         } else if (current == fGainInput) {
-            fCoeffB->setFocused(false);
-            fCoeffT->setFocused(false);
-         } else {
-             fCoeffB->setFocused(false);
-             fCoeffT->setFocused(false);
-             fGainInput->setFocused(false);
-         }
+        for (int i = 0; i < 7; i++) {
+            if (*(fTextInputs[i]) != nullptr) {
+                (*(fTextInputs[i]))->setFocused(*(fTextInputs[i]) == current);
+            }
+        }
          repaint();
      }
  
@@ -1271,6 +2355,29 @@
              setState("bottomTF", &newText[1]);
          }
      }
+
+     // Implement CustomButton::Callback
+     void buttonClicked(CustomButton* button)
+    {
+        if (button == fGenerateButton.get()) {
+            generateFilter();
+        }
+    }
+    
+    // Dropdown::Callback
+    void selectionChanged(Dropdown* dropdown, int selectedIndex)
+    {
+        if (dropdown == fFilterTypeDropdown.get()) {
+            // Filter type changed (Butterworth/Chebyshev)
+            updateFilterParametersVisibility();
+        }
+        else if (dropdown == fResponseTypeDropdown.get()) {
+            // Response type changed (LP/HP/BP/BS)
+            updateCutoffFrequenciesVisibility();
+        }
+
+        repaint();
+    }
 
      void setGain(std::string gainStr) override
     {
@@ -1342,6 +2449,102 @@
      {
          setParameterValue(kParameterButton, down ? 1.f : 0.f);
      }
+ private:
+
+  void updateFilterParametersVisibility()
+    {
+        // Show/hide ripple input based on filter type
+        if (fFilterTypeDropdown->getSelectedIndex() == 1) {  // Chebyshev
+            fRippleInput->setVisible(true);
+        } else {
+            fRippleInput->setVisible(false);
+        }
+    }
+    
+    void updateCutoffFrequenciesVisibility()
+    {
+        // For Band Pass and Band Stop, show two cutoff frequency inputs
+        // For Low Pass and High Pass, show only one
+        if (fResponseTypeDropdown->getSelectedIndex() >= 2) {  // Band Pass or Band Stop
+            fCutoffHighInput->setVisible(true);
+        } else {
+            fCutoffHighInput->setVisible(false);
+        }
+    }
+    
+    void generateFilter()
+    {
+        // Get parameters from UI components
+        FilterGenerator::FilterType filterType = 
+            static_cast<FilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
+        
+        FilterGenerator::ResponseType responseType = 
+            static_cast<FilterGenerator::ResponseType>(fResponseTypeDropdown->getSelectedIndex());
+        
+        // Parse cutoff frequencies
+        double cutoffLow = 1000.0;  // Default
+        double cutoffHigh = 4000.0; // Default
+        
+        try {
+            cutoffLow = std::stod(fCutoffLowInput->getText());
+            if (fCutoffHighInput->isVisible()) {
+                cutoffHigh = std::stod(fCutoffHighInput->getText());
+            } else {
+                // For LP/HP, use the same value for both (only the first is used)
+                cutoffHigh = cutoffLow;
+            }
+        } catch (const std::exception& e) {
+            std::cout << "Error parsing cutoff frequencies: " << e.what() << std::endl;
+            return;
+        }
+        
+        // Parse filter order
+        int order = 4;  // Default
+        try {
+            order = std::stoi(fOrderInput->getText());
+            order = std::max(1, std::min(20, order));  // Limit order to reasonable range
+        } catch (const std::exception& e) {
+            std::cout << "Error parsing filter order: " << e.what() << std::endl;
+            return;
+        }
+        
+        // Parse ripple (for Chebyshev)
+        double ripple = 0.5;  // Default
+        if (filterType == FilterGenerator::CHEBYSHEV) {
+            try {
+                ripple = std::stod(fRippleInput->getText());
+                ripple = std::max(0.1, std::min(6.0, ripple));  // Limit ripple to reasonable range
+            } catch (const std::exception& e) {
+                std::cout << "Error parsing ripple: " << e.what() << std::endl;
+                return;
+            }
+        }
+        
+        // Generate filter coefficients
+        std::pair<std::vector<double>, std::vector<double>> coeffs = 
+            fFilterGenerator->generateFilter(filterType, responseType, cutoffLow, cutoffHigh, order, ripple);
+        
+        // Update the filter coefficients
+        fNumerator = coeffs.first;
+        fDenominator = coeffs.second;
+        
+        // Format coefficients for display
+        std::string numStr = formatCoefficients(fNumerator, false);
+        std::string denStr = formatCoefficients(fDenominator, true);
+        
+        // Update coefficient text fields
+        fCoeffT->setText(numStr);
+        fCoeffB->setText(denStr);
+        
+        // Update visualizer and GUI
+        updateVisualizationFromCoefficients();
+        
+        // Update plugin state
+        setState("topTF", numStr.c_str());
+        setState("bottomTF", denStr.c_str());
+        
+        std::cout << "Filter generated successfully!" << std::endl;
+    }
  };
  
  UI* createUI()
