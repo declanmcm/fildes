@@ -29,110 +29,144 @@
  #include "Eigen/Eigen"
 
  
-// FilterGenerator class - responsible for calculating filter coefficients
-class FilterGenerator {
+// RBJ Cookbook Filter Generator class (to replace existing FilterGenerator)
+class RBJFilterGenerator {
     public:
         enum FilterType {
-            BUTTERWORTH,
-            CHEBYSHEV
-        };
-        
-        enum ResponseType {
             LOW_PASS,
             HIGH_PASS,
             BAND_PASS,
-            BAND_STOP
+            NOTCH,
+            PEAK,
+            LOW_SHELF,
+            HIGH_SHELF,
+            ALL_PASS
         };
         
-        FilterGenerator() 
+        RBJFilterGenerator() 
             : mSampleRate(44100.0) {}
         
         void setSampleRate(double sampleRate) {
             mSampleRate = sampleRate;
         }
         
-        // Generate filter coefficients based on parameters
+        // Generate filter coefficients using RBJ cookbook formulas
         std::pair<std::vector<double>, std::vector<double>> generateFilter(
             FilterType filterType,
-            ResponseType responseType,
-            double cutoffLow,
-            double cutoffHigh,
-            int order,
-            double ripple = 0.5)
+            double frequency,
+            double Q = 0.7071, // Default to Butterworth Q
+            double gainDB = 0.0,
+            double bandwidth = 1.0) // Bandwidth in octaves for shelf filters
         {
-            // Normalize frequencies to [0, 1] range (relative to Nyquist)
-            double normalizedLow = cutoffLow / (mSampleRate / 2.0);
-            double normalizedHigh = cutoffHigh / (mSampleRate / 2.0);
+            // Normalize frequency (0 to π)
+            double omega = 2.0 * M_PI * frequency / mSampleRate;
+            double cosw = cos(omega);
+            double sinw = sin(omega);
+            double alpha;
             
-            // Clamp normalized frequencies to valid range
-            normalizedLow = std::max(0.001, std::min(0.999, normalizedLow));
-            normalizedHigh = std::max(0.001, std::min(0.999, normalizedHigh));
-            
-            // Ensure normalizedHigh > normalizedLow for band filters
-            if ((responseType == BAND_PASS || responseType == BAND_STOP) && normalizedHigh <= normalizedLow) {
-                double temp = normalizedLow;
-                normalizedLow = normalizedHigh * 0.9; // Ensure separation
-                normalizedHigh = temp * 1.1;
-            }
-            
-            std::vector<double> numerator, denominator;
-            
-            // Adjust filter order for band filters
-            int effectiveOrder = order;
-            if (responseType == BAND_PASS || responseType == BAND_STOP) {
-                // For band filters, the effective order is doubled
-                effectiveOrder = std::max(1, std::min(10, order)); // Limit order more strictly for band filters
+            // Calculate alpha based on filter type
+            if (filterType == PEAK || filterType == LOW_SHELF || filterType == HIGH_SHELF) {
+                // For shelving and peaking filters, alpha can use bandwidth
+                alpha = sinw * sinh(log(2.0) / 2.0 * bandwidth * omega / sinw);
             } else {
-                effectiveOrder = std::max(1, std::min(20, order));
+                // For other filters, use Q
+                alpha = sinw / (2.0 * Q);
             }
             
-            // Generate appropriate filter based on type
-            if (filterType == BUTTERWORTH) {
-                switch (responseType) {
-                    case LOW_PASS:
-                        generateButterworthLowPass(normalizedLow, effectiveOrder, numerator, denominator);
-                        break;
-                    case HIGH_PASS:
-                        generateButterworthHighPass(normalizedLow, effectiveOrder, numerator, denominator);
-                        break;
-                    case BAND_PASS:
-                        generateButterworthBandPass(normalizedLow, normalizedHigh, effectiveOrder, numerator, denominator);
-                        break;
-                    case BAND_STOP:
-                        generateButterworthBandStop(normalizedLow, normalizedHigh, effectiveOrder, numerator, denominator);
-                        break;
-                }
+            // Convert gain from dB to linear
+            double A = pow(10.0, gainDB / 40.0); // Convert gainDB to linear amplitude
             
-            // Clean up small coefficients that might be numerical artifacts
-            for (double& c : numerator) {
-                if (std::abs(c) < 1e-12) c = 0.0;
+            // Initialize coefficients
+            double b0 = 0.0, b1 = 0.0, b2 = 0.0;
+            double a0 = 1.0, a1 = 0.0, a2 = 0.0;
+            
+            // Calculate coefficients based on filter type
+            switch (filterType) {
+                case LOW_PASS:
+                    b0 = (1.0 - cosw) / 2.0;
+                    b1 = 1.0 - cosw;
+                    b2 = (1.0 - cosw) / 2.0;
+                    a0 = 1.0 + alpha;
+                    a1 = -2.0 * cosw;
+                    a2 = 1.0 - alpha;
+                    break;
+                    
+                case HIGH_PASS:
+                    b0 = (1.0 + cosw) / 2.0;
+                    b1 = -(1.0 + cosw);
+                    b2 = (1.0 + cosw) / 2.0;
+                    a0 = 1.0 + alpha;
+                    a1 = -2.0 * cosw;
+                    a2 = 1.0 - alpha;
+                    break;
+                    
+                case BAND_PASS: // Constant skirt gain (peak gain = Q)
+                    b0 = alpha;
+                    b1 = 0.0;
+                    b2 = -alpha;
+                    a0 = 1.0 + alpha;
+                    a1 = -2.0 * cosw;
+                    a2 = 1.0 - alpha;
+                    break;
+                    
+                case NOTCH:
+                    b0 = 1.0;
+                    b1 = -2.0 * cosw;
+                    b2 = 1.0;
+                    a0 = 1.0 + alpha;
+                    a1 = -2.0 * cosw;
+                    a2 = 1.0 - alpha;
+                    break;
+                    
+                case PEAK:
+                    b0 = 1.0 + alpha * A;
+                    b1 = -2.0 * cosw;
+                    b2 = 1.0 - alpha * A;
+                    a0 = 1.0 + alpha / A;
+                    a1 = -2.0 * cosw;
+                    a2 = 1.0 - alpha / A;
+                    break;
+                    
+                case LOW_SHELF:
+                    {
+                        double sqrtA = sqrt(A);
+                        b0 = A * ((A + 1.0) - (A - 1.0) * cosw + 2.0 * sqrtA * alpha);
+                        b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * cosw);
+                        b2 = A * ((A + 1.0) - (A - 1.0) * cosw - 2.0 * sqrtA * alpha);
+                        a0 = (A + 1.0) + (A - 1.0) * cosw + 2.0 * sqrtA * alpha;
+                        a1 = -2.0 * ((A - 1.0) + (A + 1.0) * cosw);
+                        a2 = (A + 1.0) + (A - 1.0) * cosw - 2.0 * sqrtA * alpha;
+                    }
+                    break;
+                    
+                case HIGH_SHELF:
+                    {
+                        double sqrtA = sqrt(A);
+                        b0 = A * ((A + 1.0) + (A - 1.0) * cosw + 2.0 * sqrtA * alpha);
+                        b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cosw);
+                        b2 = A * ((A + 1.0) + (A - 1.0) * cosw - 2.0 * sqrtA * alpha);
+                        a0 = (A + 1.0) - (A - 1.0) * cosw + 2.0 * sqrtA * alpha;
+                        a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cosw);
+                        a2 = (A + 1.0) - (A - 1.0) * cosw - 2.0 * sqrtA * alpha;
+                    }
+                    break;
+                    
+                case ALL_PASS:
+                    b0 = 1.0 - alpha;
+                    b1 = -2.0 * cosw;
+                    b2 = 1.0 + alpha;
+                    a0 = 1.0 + alpha;
+                    a1 = -2.0 * cosw;
+                    a2 = 1.0 - alpha;
+                    break;
             }
             
-            for (double& c : denominator) {
-                if (std::abs(c) < 1e-12) c = 0.0;
-            }
-            } else {  // CHEBYSHEV
-                switch (responseType) {
-                    case LOW_PASS:
-                        generateChebyshevLowPass(normalizedLow, effectiveOrder, ripple, numerator, denominator);
-                        break;
-                    case HIGH_PASS:
-                        generateChebyshevHighPass(normalizedLow, effectiveOrder, ripple, numerator, denominator);
-                        break;
-                    case BAND_PASS:
-                        generateChebyshevBandPass(normalizedLow, normalizedHigh, effectiveOrder, ripple, numerator, denominator);
-                        break;
-                    case BAND_STOP:
-                        generateChebyshevBandStop(normalizedLow, normalizedHigh, effectiveOrder, ripple, numerator, denominator);
-                        break;
-                }
-            }
-            
-            // Apply gain normalization to prevent tiny coefficients
-            normalizeFilterGain(numerator, denominator, responseType, normalizedLow, normalizedHigh);
+            // Normalize coefficients by a0
+            std::vector<double> numerator = {b0 / a0, b1 / a0, b2 / a0};
+            std::vector<double> denominator = {1.0, a1 / a0, a2 / a0};
             
             // Debug output
-            std::cout << "Generated filter coefficients:" << std::endl;
+            std::cout << "Generated RBJ filter coefficients:" << std::endl;
             std::cout << "Numerator: ";
             for (double c : numerator) std::cout << c << " ";
             std::cout << std::endl;
@@ -145,725 +179,6 @@ class FilterGenerator {
         
     private:
         double mSampleRate;
-        
-        // Normalize filter gain to prevent tiny coefficients at high orders
-        void normalizeFilterGain(std::vector<double>& numerator, std::vector<double>& denominator, 
-                                 ResponseType responseType, double f1, double f2) {
-            // Evaluate filter at key frequency
-            double evalFreq;
-            if (responseType == LOW_PASS) {
-                evalFreq = 0.0; // DC
-            } else if (responseType == HIGH_PASS) {
-                evalFreq = 0.5; // Nyquist
-            } else if (responseType == BAND_PASS) {
-                evalFreq = (f1 + f2) / 2.0; // Center frequency
-            } else { // BAND_STOP
-                evalFreq = 0.0; // DC
-            }
-            
-            // Calculate response at target frequency
-            double omega = 2.0 * M_PI * evalFreq;
-            std::complex<double> response = evaluateFilter(numerator, denominator, omega);
-            double magnitude = std::abs(response);
-            
-            // Normalize if magnitude is very small or large
-            if (magnitude < 0.01 || magnitude > 100.0) {
-                double scale = (responseType == BAND_STOP) ? 1.0 / magnitude : 1.0;
-                
-                // Apply scale to numerator
-                for (double& c : numerator) {
-                    c *= scale;
-                }
-            }
-        }
-        
-        std::complex<double> evaluateFilter(const std::vector<double>& num, const std::vector<double>& den, double omega) {
-            std::complex<double> numerator(0.0, 0.0);
-            std::complex<double> denominator(0.0, 0.0);
-            
-            for (size_t i = 0; i < num.size(); i++) {
-                double angle = -omega * static_cast<double>(i);
-                std::complex<double> z(std::cos(angle), std::sin(angle));
-                numerator += num[i] * z;
-            }
-            
-            for (size_t i = 0; i < den.size(); i++) {
-                double angle = -omega * static_cast<double>(i);
-                std::complex<double> z(std::cos(angle), std::sin(angle));
-                denominator += den[i] * z;
-            }
-            
-            if (std::abs(denominator) > 1e-10) {
-                return numerator / denominator;
-            }
-            
-            return std::complex<double>(0.0, 0.0);
-        }
-        
-        // Butterworth filter implementations
-        void generateButterworthLowPass(double cutoff, int order, 
-                                       std::vector<double>& numerator, 
-                                       std::vector<double>& denominator) {
-            // Calculate prewarped analog frequency
-            double omega_c = 2 * tan(M_PI * cutoff / 2);
-            
-            // Generate analog prototype poles
-            std::vector<std::complex<double>> poles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sin(theta);
-                double im = cos(theta);
-                poles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Map analog poles to digital using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : poles) {
-                // Scale by cutoff frequency
-                std::complex<double> scaledPole = p * omega_c;
-                
-                // Apply bilinear transform: z = (1 + s)/(1 - s)
-                std::complex<double> digitalPole = (1.0 + scaledPole) / (1.0 - scaledPole);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            // Convert poles to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, {}, numerator, denominator);
-            
-            // Add scaling to make DC gain = 1
-            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
-            for (double& n : numerator) {
-                n /= dcGain;
-            }
-        }
-        
-        void generateButterworthHighPass(double cutoff, int order, 
-                                        std::vector<double>& numerator, 
-                                        std::vector<double>& denominator) {
-            // Calculate prewarped analog frequency
-            double omega_c = 2.0 * tan(M_PI * cutoff / 2.0);
-            
-            // Generate analog prototype poles (same as lowpass)
-            std::vector<std::complex<double>> poles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sin(theta);
-                double im = cos(theta);
-                poles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Highpass transformation: replace s with 1/s in analog domain
-            std::vector<std::complex<double>> hpPoles;
-            for (const auto& p : poles) {
-                // s -> 1/s transformation
-                std::complex<double> hpPole = 1.0 / p;
-                
-                // Scale by cutoff frequency
-                hpPole = hpPole * omega_c;
-                hpPoles.push_back(hpPole);
-            }
-            
-            // Create zeros at z=1 (s=0)
-            std::vector<std::complex<double>> zeros(order, 1.0);
-            
-            // Map to digital domain using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : hpPoles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            std::vector<std::complex<double>> digitalZeros;
-            for (const auto& z : zeros) {
-                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
-                digitalZeros.push_back(digitalZero);
-            }
-            
-            // Convert to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
-            
-            // Adjust gain to have unity gain at Nyquist frequency
-            double nyquistGain = 0.0;
-            double sign = 1.0;
-            for (double n : numerator) {
-                nyquistGain += n * sign;
-                sign = -sign;
-            }
-            
-            sign = 1.0;
-            double nyquistDenom = 0.0;
-            for (double d : denominator) {
-                nyquistDenom += d * sign;
-                sign = -sign;
-            }
-            
-            if (std::abs(nyquistDenom) > 1e-10) {
-                double gain = nyquistDenom / nyquistGain;
-                for (double& n : numerator) {
-                    n *= gain;
-                }
-            }
-        }
-        
-        void generateButterworthBandPass(double cutoffLow, double cutoffHigh, int order, 
-                                        std::vector<double>& numerator, 
-                                        std::vector<double>& denominator) {
-            // Calculate center frequency and bandwidth
-            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
-            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
-            
-            // Generate analog prototype poles
-            std::vector<std::complex<double>> protoPoles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sin(theta);
-                double im = cos(theta);
-                protoPoles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Apply bandpass transformation to each pole
-            std::vector<std::complex<double>> bpPoles;
-            std::vector<std::complex<double>> bpZeros;
-            
-            for (const auto& p : protoPoles) {
-                // For each LP prototype pole p, the bandpass transformation creates two poles:
-                // p1 = (p*BW/2) + sqrt((p*BW/2)^2 - omega0^2)
-                // p2 = (p*BW/2) - sqrt((p*BW/2)^2 - omega0^2)
-                
-                std::complex<double> scaled_p = p * bandwidth / 2.0;
-                std::complex<double> discriminant = scaled_p * scaled_p - omega0 * omega0;
-                std::complex<double> sqrt_disc = std::sqrt(discriminant);
-                
-                bpPoles.push_back(scaled_p + sqrt_disc);
-                bpPoles.push_back(scaled_p - sqrt_disc);
-                
-                // Each BP filter also has zeros at s=0 (DC) and s=infinity
-                bpZeros.push_back(std::complex<double>(0.0, 0.0));  // DC zero
-            }
-            
-            // Add zeros at infinity (implemented by making numerator 1 degree less than denominator)
-            
-            // Convert to digital domain using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : bpPoles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            std::vector<std::complex<double>> digitalZeros;
-            for (const auto& z : bpZeros) {
-                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
-                digitalZeros.push_back(digitalZero);
-            }
-            
-            // Add zeros at z=-1 (Nyquist) to match order
-            for (int i = 0; i < order; i++) {
-                digitalZeros.push_back(std::complex<double>(-1.0, 0.0));
-            }
-            
-            // Convert to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
-            
-            // Normalize gain at center frequency
-            double centerFreq = (cutoffLow + cutoffHigh) / 2.0;
-            double omega = 2.0 * M_PI * centerFreq;
-            std::complex<double> response = evaluateFilter(numerator, denominator, omega);
-            double magnitude = std::abs(response);
-            
-            if (magnitude > 1e-10) {
-                double gain = 1.0 / magnitude;
-                for (double& n : numerator) {
-                    n *= gain;
-                }
-            }
-        }
-        
-        void generateButterworthBandStop(double cutoffLow, double cutoffHigh, int order, 
-                                        std::vector<double>& numerator, 
-                                        std::vector<double>& denominator) {
-            // Calculate center frequency and bandwidth
-            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
-            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
-            
-            // Generate analog prototype poles
-            std::vector<std::complex<double>> protoPoles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sin(theta);
-                double im = cos(theta);
-                protoPoles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Apply bandstop transformation to each pole
-            std::vector<std::complex<double>> bsPoles;
-            std::vector<std::complex<double>> bsZeros;
-            
-            for (const auto& p : protoPoles) {
-                // For each LP prototype pole p, the bandstop transformation creates two poles:
-                // p1 = (BW/2)/p + sqrt((BW/2)^2/p^2 - omega0^2)
-                // p2 = (BW/2)/p - sqrt((BW/2)^2/p^2 - omega0^2)
-                
-                std::complex<double> inv_p = bandwidth / (2.0 * p);
-                std::complex<double> discriminant = (inv_p * inv_p) - (omega0 * omega0);
-                std::complex<double> sqrt_disc = std::sqrt(discriminant);
-                
-                bsPoles.push_back(inv_p + sqrt_disc);
-                bsPoles.push_back(inv_p - sqrt_disc);
-                
-                // Each BS filter has zeros on imaginary axis at +/- j*omega0
-                bsZeros.push_back(std::complex<double>(0.0, omega0));
-                bsZeros.push_back(std::complex<double>(0.0, -omega0));
-            }
-            
-            // Convert to digital domain using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : bsPoles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            std::vector<std::complex<double>> digitalZeros;
-            for (const auto& z : bsZeros) {
-                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
-                digitalZeros.push_back(digitalZero);
-            }
-            
-            // Convert to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
-            
-            // Normalize gain at DC
-            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
-            for (double& n : numerator) {
-                n /= dcGain;
-            }
-        }
-        
-        // Chebyshev filter implementations
-        void generateChebyshevLowPass(double cutoff, int order, double ripple,
-                                     std::vector<double>& numerator, 
-                                     std::vector<double>& denominator) {
-            // Convert ripple from dB to epsilon
-            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
-            
-            // Calculate alpha value
-            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
-            double sinh_alpha = sinh(alpha);
-            double cosh_alpha = cosh(alpha);
-            
-            // Generate Chebyshev poles
-            std::vector<std::complex<double>> poles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sinh_alpha * sin(theta);
-                double im = cosh_alpha * cos(theta);
-                poles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Calculate prewarped analog frequency
-            double omega_c = 2.0 * tan(M_PI * cutoff / 2.0);
-            
-            // Scale poles by cutoff frequency
-            for (auto& p : poles) {
-                p *= omega_c;
-            }
-            
-            // Map analog poles to digital using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : poles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            // Convert poles to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, {}, numerator, denominator);
-            
-            // Adjust gain to get proper passband ripple
-            double H0 = 1.0;
-            if (order % 2 == 0) {  // even order
-                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
-            }
-            
-            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
-            for (double& n : numerator) {
-                n *= H0 / dcGain;
-            }
-        }
-        
-        void generateChebyshevHighPass(double cutoff, int order, double ripple,
-                                      std::vector<double>& numerator, 
-                                      std::vector<double>& denominator) {
-            // Convert ripple from dB to epsilon
-            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
-            
-            // Calculate alpha value
-            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
-            double sinh_alpha = sinh(alpha);
-            double cosh_alpha = cosh(alpha);
-            
-            // Generate Chebyshev poles
-            std::vector<std::complex<double>> poles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sinh_alpha * sin(theta);
-                double im = cosh_alpha * cos(theta);
-                poles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Highpass transformation: replace s with 1/s in analog domain
-            std::vector<std::complex<double>> hpPoles;
-            for (const auto& p : poles) {
-                hpPoles.push_back(1.0 / p);
-            }
-            
-            // Calculate prewarped analog frequency
-            double omega_c = 2.0 * tan(M_PI * cutoff / 2.0);
-            
-            // Scale poles by cutoff frequency
-            for (auto& p : hpPoles) {
-                p *= omega_c;
-            }
-            
-            // Create zeros at z=1 (s=0)
-            std::vector<std::complex<double>> zeros(order, 1.0);
-            
-            // Map to digital domain using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : hpPoles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            std::vector<std::complex<double>> digitalZeros;
-            for (const auto& z : zeros) {
-                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
-                digitalZeros.push_back(digitalZero);
-            }
-            
-            // Convert to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
-            
-            // Adjust gain for proper stopband ripple at Nyquist
-            double H0 = 1.0;
-            if (order % 2 == 0) {  // even order
-                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
-            }
-            
-            // Evaluate gain at Nyquist
-            double nyquistGain = 0.0;
-            double sign = 1.0;
-            for (double n : numerator) {
-                nyquistGain += n * sign;
-                sign = -sign;
-            }
-            
-            sign = 1.0;
-            double nyquistDenom = 0.0;
-            for (double d : denominator) {
-                nyquistDenom += d * sign;
-                sign = -sign;
-            }
-            
-            double gain = H0 * nyquistDenom / nyquistGain;
-            for (double& n : numerator) {
-                n *= gain;
-            }
-        }
-        
-        void generateChebyshevBandPass(double cutoffLow, double cutoffHigh, int order, double ripple,
-                                      std::vector<double>& numerator, 
-                                      std::vector<double>& denominator) {
-            // Implement using the same approach as Butterworth, but with Chebyshev prototype poles
-            
-            // Convert ripple from dB to epsilon
-            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
-            
-            // Calculate alpha value
-            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
-            double sinh_alpha = sinh(alpha);
-            double cosh_alpha = cosh(alpha);
-            
-            // Generate Chebyshev poles
-            std::vector<std::complex<double>> protoPoles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sinh_alpha * sin(theta);
-                double im = cosh_alpha * cos(theta);
-                protoPoles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Calculate center frequency and bandwidth
-            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
-            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
-            
-            // Apply bandpass transformation to each pole
-            std::vector<std::complex<double>> bpPoles;
-            std::vector<std::complex<double>> bpZeros;
-            
-            for (const auto& p : protoPoles) {
-                std::complex<double> scaled_p = p * bandwidth / 2.0;
-                std::complex<double> discriminant = scaled_p * scaled_p - omega0 * omega0;
-                std::complex<double> sqrt_disc = std::sqrt(discriminant);
-                
-                bpPoles.push_back(scaled_p + sqrt_disc);
-                bpPoles.push_back(scaled_p - sqrt_disc);
-                
-                // Each BP filter also has zeros at s=0 (DC)
-                bpZeros.push_back(std::complex<double>(0.0, 0.0));
-            }
-            
-            // Convert to digital domain using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : bpPoles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            std::vector<std::complex<double>> digitalZeros;
-            for (const auto& z : bpZeros) {
-                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
-                digitalZeros.push_back(digitalZero);
-            }
-            
-            // Add zeros at z=-1 (Nyquist) to match order
-            for (int i = 0; i < order; i++) {
-                digitalZeros.push_back(std::complex<double>(-1.0, 0.0));
-            }
-            
-            // Convert to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
-            
-            // Adjust gain at center frequency
-            double H0 = 1.0;
-            if (order % 2 == 0) {  // even order
-                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
-            }
-            
-            // Evaluate at center frequency
-            double centerFreq = (cutoffLow + cutoffHigh) / 2.0;
-            double omega = 2.0 * M_PI * centerFreq;
-            std::complex<double> response = evaluateFilter(numerator, denominator, omega);
-            double magnitude = std::abs(response);
-            
-            if (magnitude > 1e-10) {
-                double gain = H0 / magnitude;
-                for (double& n : numerator) {
-                    n *= gain;
-                }
-            }
-        }
-        
-        void generateChebyshevBandStop(double cutoffLow, double cutoffHigh, int order, double ripple,
-                                      std::vector<double>& numerator, 
-                                      std::vector<double>& denominator) {
-            // Implement using the same approach as Butterworth, but with Chebyshev prototype poles
-            
-            // Convert ripple from dB to epsilon
-            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
-            
-            // Calculate alpha value
-            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
-            double sinh_alpha = sinh(alpha);
-            double cosh_alpha = cosh(alpha);
-            
-            // Generate Chebyshev poles
-            std::vector<std::complex<double>> protoPoles;
-            double poleAngleIncrement = M_PI / order;
-            
-            for (int i = 0; i < order; i++) {
-                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
-                double re = -sinh_alpha * sin(theta);
-                double im = cosh_alpha * cos(theta);
-                protoPoles.push_back(std::complex<double>(re, im));
-            }
-            
-            // Calculate center frequency and bandwidth
-            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
-            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
-            
-            // Apply bandstop transformation to each pole
-            std::vector<std::complex<double>> bsPoles;
-            std::vector<std::complex<double>> bsZeros;
-            
-            for (const auto& p : protoPoles) {
-                std::complex<double> inv_p = bandwidth / (2.0 * p);
-                std::complex<double> discriminant = (inv_p * inv_p) - (omega0 * omega0);
-                std::complex<double> sqrt_disc = std::sqrt(discriminant);
-                
-                bsPoles.push_back(inv_p + sqrt_disc);
-                bsPoles.push_back(inv_p - sqrt_disc);
-                
-                // Each BS filter has zeros on imaginary axis at +/- j*omega0
-                bsZeros.push_back(std::complex<double>(0.0, omega0));
-                bsZeros.push_back(std::complex<double>(0.0, -omega0));
-            }
-            
-            // Convert to digital domain using bilinear transform
-            std::vector<std::complex<double>> digitalPoles;
-            for (const auto& p : bsPoles) {
-                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
-                digitalPoles.push_back(digitalPole);
-            }
-            
-            std::vector<std::complex<double>> digitalZeros;
-            for (const auto& z : bsZeros) {
-                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
-                digitalZeros.push_back(digitalZero);
-            }
-            
-            // Convert to transfer function coefficients
-            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
-            
-            // Adjust gain for proper ripple
-            double H0 = 1.0;
-            if (order % 2 == 0) {  // even order
-                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
-            }
-            
-            // Normalize gain at DC
-            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
-            for (double& n : numerator) {
-                n *= H0 / dcGain;
-            }
-        }
-        
-        // Polynomial evaluation at z
-        double evaluatePolyomial(const std::vector<double>& coeffs, double z) {
-            double result = 0.0;
-            double z_power = 1.0;
-            
-            for (double c : coeffs) {
-                result += c * z_power;
-                z_power *= z;
-            }
-            
-            return result;
-        }
-        
-        // Convert poles and zeros to transfer function coefficients
-        void polesZerosToTransferFunction(const std::vector<std::complex<double>>& poles,
-                                         const std::vector<std::complex<double>>& zeros,
-                                         std::vector<double>& numerator,
-                                         std::vector<double>& denominator) {
-            // Start with constant term
-            numerator = {1.0};
-            denominator = {1.0};
-            
-            // Create working copies of poles and zeros that we can modify
-            std::vector<std::complex<double>> workingZeros = zeros;
-            std::vector<bool> processedZeros(workingZeros.size(), false);
-            
-            // Process zeros
-            for (size_t index = 0; index < workingZeros.size(); index++) {
-                // Skip if this zero has been processed already
-                if (processedZeros[index]) {
-                    continue;
-                }
-                
-                const auto& zero = workingZeros[index];
-                // Multiply numerator by (z - zero)
-                std::vector<double> term;
-                
-                if (std::abs(zero.imag()) < 1e-10) {
-                    // Real zero: (z - a)
-                    term = {-zero.real(), 1.0};
-                    convolvePoly(numerator, term);
-                    processedZeros[index] = true;
-                } else {
-                    // For complex zeros, add conjugate pair: (z - a)(z - a*)
-                    // This expands to z^2 - 2*Re(a)*z + |a|^2
-                    double re = zero.real();
-                    double norm = std::norm(zero);  // |zero|^2
-                    term = {norm, -2.0 * re, 1.0};
-                    convolvePoly(numerator, term);
-                    processedZeros[index] = true;
-                    
-                    // Find and mark conjugate zero as processed
-                    for (size_t i = index + 1; i < workingZeros.size(); i++) {
-                        if (std::abs(workingZeros[i].real() - zero.real()) < 1e-10 &&
-                            std::abs(workingZeros[i].imag() + zero.imag()) < 1e-10) {
-                            processedZeros[i] = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            // Create working copies for poles
-            std::vector<std::complex<double>> workingPoles = poles;
-            std::vector<bool> processedPoles(workingPoles.size(), false);
-            
-            // Process poles
-            for (size_t index = 0; index < workingPoles.size(); index++) {
-                // Skip if this pole has been processed already
-                if (processedPoles[index]) {
-                    continue;
-                }
-                
-                const auto& pole = workingPoles[index];
-                // Multiply denominator by (z - pole)
-                std::vector<double> term;
-                
-                if (std::abs(pole.imag()) < 1e-10) {
-                    // Real pole: (z - a)
-                    term = {-pole.real(), 1.0};
-                    convolvePoly(denominator, term);
-                    processedPoles[index] = true;
-                } else {
-                    // For complex poles, add conjugate pair: (z - a)(z - a*)
-                    // This expands to z^2 - 2*Re(a)*z + |a|^2
-                    double re = pole.real();
-                    double norm = std::norm(pole);  // |pole|^2
-                    term = {norm, -2.0 * re, 1.0};
-                    convolvePoly(denominator, term);
-                    processedPoles[index] = true;
-                    
-                    // Find and mark conjugate pole as processed
-                    for (size_t i = index + 1; i < workingPoles.size(); i++) {
-                        if (std::abs(workingPoles[i].real() - pole.real()) < 1e-10 &&
-                            std::abs(workingPoles[i].imag() + pole.imag()) < 1e-10) {
-                            processedPoles[i] = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            // Clean up small coefficients that might be numerical artifacts
-            for (double& c : numerator) {
-                if (std::abs(c) < 1e-12) c = 0.0;
-            }
-            
-            for (double& c : denominator) {
-                if (std::abs(c) < 1e-12) c = 0.0;
-            }
-        }
-        
-        // Convolve two polynomials
-        void convolvePoly(std::vector<double>& poly, const std::vector<double>& term) {
-            std::vector<double> result(poly.size() + term.size() - 1, 0.0);
-            
-            for (size_t i = 0; i < poly.size(); i++) {
-                for (size_t j = 0; j < term.size(); j++) {
-                    result[i + j] += poly[i] * term[j];
-                }
-            }
-            
-            poly = result;
-        }
     };
     
     // Add this class for a custom button widget (to be used for the Generate button)
@@ -1771,15 +1086,13 @@ class FildesUI : public UI,
      ScopedPointer<EditableText> fCoeffT, fCoeffB;
      ScopedPointer<DGL::SubWidget> fContainer;
 
-    // Filter generator variables
-    ScopedPointer<FilterGenerator> fFilterGenerator;
-    ScopedPointer<Dropdown> fFilterTypeDropdown;
-    ScopedPointer<Dropdown> fResponseTypeDropdown;
-    ScopedPointer<EditableText> fCutoffLowInput;
-    ScopedPointer<EditableText> fCutoffHighInput;
-    ScopedPointer<EditableText> fOrderInput;
-    ScopedPointer<EditableText> fRippleInput;  // For Chebyshev filters
-    ScopedPointer<CustomButton> fGenerateButton;
+     ScopedPointer<RBJFilterGenerator> fRBJFilterGenerator;
+     ScopedPointer<Dropdown> fFilterTypeDropdown;
+     ScopedPointer<EditableText> fFrequencyInput;
+     ScopedPointer<EditableText> fQInput;
+     ScopedPointer<EditableText> fGainDBInput;
+     ScopedPointer<EditableText> fBandwidthInput;
+     ScopedPointer<CustomButton> fGenerateButton;
 
 
     ScopedPointer<EditableText> *fTextInputs[7];
@@ -1802,6 +1115,7 @@ class FildesUI : public UI,
      // Dragging state
      bool fIsDragging;
      bool fDraggingPole;  // true for pole, false for zero
+     bool fGeneratorTracking;
      double fDragStartX, fDragStartY;
  
      int fDraggedIndex;
@@ -1817,6 +1131,7 @@ class FildesUI : public UI,
          parseCoefficients("1,0,0,0", fDenominator);
          fVisualizer.setNumerator(fNumerator);
          fVisualizer.setDenominator(fDenominator);
+         fGeneratorTracking = false;
          
          CairoImage knobSkin;
          knobSkin.loadFromPNG(Artwork::knobData, Artwork::knobDataSize);
@@ -1879,72 +1194,107 @@ class FildesUI : public UI,
          if (scaleFactor != 1.0)
              setSize(800 * scaleFactor, 650 * scaleFactor);
 
-        // Initialize filter generator
-        fFilterGenerator = new FilterGenerator();
-        fFilterGenerator->setSampleRate(getSampleRate());
-        
-        // Create filter type dropdown
-        std::vector<std::string> filterTypes = {"Butterworth", "Chebyshev"};
+        // Initialize RBJ filter generator
+        fRBJFilterGenerator = new RBJFilterGenerator();
+        fRBJFilterGenerator->setSampleRate(getSampleRate());
+
+        // Create filter type dropdown for RBJ cookbook filters
+        std::vector<std::string> filterTypes = {
+            "Low Pass", "High Pass", "Band Pass", "Notch", 
+            "Peak", "Low Shelf", "High Shelf", "All Pass"
+        };
         fFilterTypeDropdown = new Dropdown(this, filterTypes);
-        fFilterTypeDropdown->setAbsolutePos(150, 370);
-        fFilterTypeDropdown->setSize(150, 30);
+        fFilterTypeDropdown->setAbsolutePos(150, 420);
+        fFilterTypeDropdown->setSize(200, 30);
         fFilterTypeDropdown->setCallback(this);
-        
-        // Create response type dropdown
-        std::vector<std::string> responseTypes = {"Low Pass", "High Pass", "Band Pass", "Band Stop"};
-        fResponseTypeDropdown = new Dropdown(this, responseTypes);
-        fResponseTypeDropdown->setAbsolutePos(150, 420);
-        fResponseTypeDropdown->setSize(150, 30);
-        fResponseTypeDropdown->setCallback(this);
-        
-        // Create frequency inputs
-        fCutoffLowInput = new EditableText(this, " ");
-        fCutoffLowInput->setAbsolutePos(150, 470);
-        fCutoffLowInput->setSize(100, 30);
-        fCutoffLowInput->setCallback(this);
-        fCutoffLowInput->setText("1000");  // Default value
-        
-        fCutoffHighInput = new EditableText(this, " ");
-        fCutoffHighInput->setAbsolutePos(270, 470);
-        fCutoffHighInput->setSize(100, 30);
-        fCutoffHighInput->setCallback(this);
-        fCutoffHighInput->setText("4000");  // Default value
-        
-        // Create order input
-        fOrderInput = new EditableText(this, " ");
-        fOrderInput->setAbsolutePos(150, 520);
-        fOrderInput->setSize(100, 30);
-        fOrderInput->setCallback(this);
-        fOrderInput->setText("4");  // Default value
-        
-        // Create ripple input (for Chebyshev filters)
-        fRippleInput = new EditableText(this, " ");
-        fRippleInput->setAbsolutePos(270, 520);
-        fRippleInput->setSize(100, 30);
-        fRippleInput->setCallback(this);
-        fRippleInput->setText("0.5");  // Default value
-        
+
+        // Create frequency input
+        fFrequencyInput = new EditableText(this, " ");
+        fFrequencyInput->setAbsolutePos(150, 470);
+        fFrequencyInput->setSize(150, 30);
+        fFrequencyInput->setCallback(this);
+        fFrequencyInput->setText("1000");  // Default value
+
+        // Create Q input
+        fQInput = new EditableText(this, " ");
+        fQInput->setAbsolutePos(150, 520);
+        fQInput->setSize(150, 30);
+        fQInput->setCallback(this);
+        fQInput->setText("0.7071");  // Default Butterworth Q
+
+        // Create gain dB input (for peak and shelf filters)
+        fGainDBInput = new EditableText(this, " ");
+        fGainDBInput->setAbsolutePos(150, 570);
+        fGainDBInput->setSize(150, 30);
+        fGainDBInput->setCallback(this);
+        fGainDBInput->setText("0.0");  // Default value
+        fGainDBInput->setVisible(false);
+
+        // Create bandwidth input (alternative to Q for some filters)
+        fBandwidthInput = new EditableText(this, " ");
+        fBandwidthInput->setAbsolutePos(320, 520);
+        fBandwidthInput->setSize(150, 30);
+        fBandwidthInput->setCallback(this);
+        fBandwidthInput->setText("1.0");  // Default value (in octaves)
+        fBandwidthInput->setVisible(false);
+
         // Create generate button
-        fGenerateButton = new CustomButton(this, "Generate Filter");
-        fGenerateButton->setAbsolutePos(150, 570);
+        fGenerateButton = new CustomButton(this, "Toggle Tracking");
+        fGenerateButton->setAbsolutePos(150, 620);
         fGenerateButton->setSize(150, 40);
         fGenerateButton->setCallback(this);
-        
-        // Initialize visibility
-        updateFilterParametersVisibility();
-        updateCutoffFrequenciesVisibility();
 
-
+        // Add these to the fTextInputs array
+        fTextInputs[3] = &fFrequencyInput;
+        fTextInputs[4] = &fQInput;
+        fTextInputs[5] = &fGainDBInput;
+        fTextInputs[6] = &fBandwidthInput;
         fTextInputs[0] = &fCoeffT;
         fTextInputs[1] = &fCoeffB;
         fTextInputs[2] = &fGainInput;
-        fTextInputs[3] = &fCutoffHighInput;
-        fTextInputs[4] = &fCutoffLowInput;
-        fTextInputs[5] = &fOrderInput;
-        fTextInputs[6] = &fRippleInput;
+
+        // Initialize visibility based on current filter type
+        updateFilterParametersVisibility();
      }
  
  protected:
+
+    void drawFilterParameterLabels(cairo_t* cr)
+    {
+        // Draw filter generator section title
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        if (fGeneratorTracking) cairo_set_source_rgb(cr, 0.0, 0.0, 0.5);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 20);
+        cairo_move_to(cr, 10, 400);
+        cairo_show_text(cr, "Filter Generator");
+        
+        // Draw filter parameter labels
+        cairo_set_font_size(cr, 16);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        
+        cairo_move_to(cr, 10, 440);
+        cairo_show_text(cr, "Filter Type:");
+        
+        cairo_move_to(cr, 10, 490);
+        cairo_show_text(cr, "Frequency (Hz):");
+        
+        cairo_move_to(cr, 10, 540);
+        cairo_show_text(cr, "Q:");
+        
+        // Show bandwidth label if applicable
+        if (fBandwidthInput->isVisible()) {
+            cairo_move_to(cr, 320, 490);
+            cairo_show_text(cr, "Bandwidth (oct):");
+        }
+        
+        // Show gain label if applicable
+        if (fGainDBInput->isVisible()) {
+            cairo_move_to(cr, 10, 540);
+            cairo_show_text(cr, "Gain (dB):");
+        }
+    }
+
      void onCairoDisplay(const CairoGraphicsContext& context)
      {
          cairo_t* const cr = context.handle;
@@ -1956,49 +1306,21 @@ class FildesUI : public UI,
          cairo_set_font_size(cr, 20);
  
          cairo_move_to(cr, 10, 30);
-         cairo_show_text(cr, "Transfer Function:");
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 20);
+        cairo_show_text(cr, "Transfer Function");
          
          cairo_move_to(cr, 10, 75);
+         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
          cairo_show_text(cr, "Numerator:");
          
          cairo_move_to(cr, 10, 125);
          cairo_show_text(cr, "Denominator:");
  
-         cairo_move_to(cr, 10, 30);
-         cairo_show_text(cr, "Transfer Function:"); // Static text
- 
          drawFrequencyResponse(cr);
  
          drawPoleZeroPlot(cr);
-
-         // Draw filter generator section title
-        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-        cairo_set_font_size(cr, 20);
-        cairo_move_to(cr, 10, 350);
-        cairo_show_text(cr, "Filter Generator");
-        
-        // Draw filter parameter labels
-        cairo_set_font_size(cr, 16);
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-        
-        cairo_move_to(cr, 10, 390);
-        cairo_show_text(cr, "Filter Type:");
-        
-        cairo_move_to(cr, 10, 440);
-        cairo_show_text(cr, "Response:");
-        
-        cairo_move_to(cr, 10, 490);
-        cairo_show_text(cr, "Cutoff (Hz):");
-        
-        cairo_move_to(cr, 10, 540);
-        cairo_show_text(cr, "Order:");
-        
-        // If Chebyshev is selected, draw ripple label
-        if (fFilterTypeDropdown && fFilterTypeDropdown->getSelectedIndex() == 1) {
-            cairo_move_to(cr, 210, 540);
-            cairo_show_text(cr, "Ripple (dB):");
-        }
+        drawFilterParameterLabels(cr);
      }
  
      void drawFrequencyResponse(cairo_t* cr)
@@ -2617,22 +1939,19 @@ class FildesUI : public UI,
     {
         if (button == fGenerateButton.get()) {
             generateFilter();
+            fGeneratorTracking = true;
         }
     }
     
     // Dropdown::Callback
-    void selectionChanged(Dropdown* dropdown, int selectedIndex)
+    void selectionChanged(Dropdown* dropdown, int selectedIndex) override
     {
         if (dropdown == fFilterTypeDropdown.get()) {
-            // Filter type changed (Butterworth/Chebyshev)
+            // Update parameter visibility based on filter type
             updateFilterParametersVisibility();
+            generateFilter();
+            repaint();
         }
-        else if (dropdown == fResponseTypeDropdown.get()) {
-            // Response type changed (LP/HP/BP/BS)
-            updateCutoffFrequenciesVisibility();
-        }
-
-        repaint();
     }
 
      void setGain(std::string gainStr) override
@@ -2707,78 +2026,77 @@ class FildesUI : public UI,
      }
  private:
 
-  void updateFilterParametersVisibility()
+  // Update visibility of parameters based on filter type
+    void updateFilterParametersVisibility()
     {
-        // Show/hide ripple input based on filter type
-        if (fFilterTypeDropdown->getSelectedIndex() == 1) {  // Chebyshev
-            fRippleInput->setVisible(true);
-        } else {
-            fRippleInput->setVisible(false);
+        // All filter types use frequency and Q
+        fFrequencyInput->setVisible(true);
+        fQInput->setVisible(true);
+        
+        // Only certain filter types use gain
+        RBJFilterGenerator::FilterType filterType = 
+            static_cast<RBJFilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
+        
+        switch (filterType) {
+            case RBJFilterGenerator::PEAK:
+            case RBJFilterGenerator::LOW_SHELF:
+            case RBJFilterGenerator::HIGH_SHELF:
+                fGainDBInput->setVisible(true);
+                fBandwidthInput->setVisible(true);
+                break;
+                
+            default:
+                fGainDBInput->setVisible(false);
+                fBandwidthInput->setVisible(false);
+                break;
         }
     }
-    
-    void updateCutoffFrequenciesVisibility()
-    {
-        // For Band Pass and Band Stop, show two cutoff frequency inputs
-        // For Low Pass and High Pass, show only one
-        if (fResponseTypeDropdown->getSelectedIndex() >= 2) {  // Band Pass or Band Stop
-            fCutoffHighInput->setVisible(true);
-        } else {
-            fCutoffHighInput->setVisible(false);
-        }
+
+    void generateIfTracking() override {
+        if (fGeneratorTracking)
+            generateFilter();
     }
     
     void generateFilter()
     {
-        // Get parameters from UI components
-        FilterGenerator::FilterType filterType = 
-            static_cast<FilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
-        
-        FilterGenerator::ResponseType responseType = 
-            static_cast<FilterGenerator::ResponseType>(fResponseTypeDropdown->getSelectedIndex());
-        
-        // Parse cutoff frequencies
-        double cutoffLow = 1000.0;  // Default
-        double cutoffHigh = 4000.0; // Default
+        // Get selected filter type
+        RBJFilterGenerator::FilterType filterType = 
+            static_cast<RBJFilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
+            
+        // Parse parameters from input fields
+        double frequency = 1000.0;  // Default
+        double Q = 0.7071;  // Default
+        double gainDB = 0.0;  // Default
+        double bandwidth = 1.0;  // Default
         
         try {
-            cutoffLow = std::stod(fCutoffLowInput->getText());
-            if (fCutoffHighInput->isVisible()) {
-                cutoffHigh = std::stod(fCutoffHighInput->getText());
-            } else {
-                // For LP/HP, use the same value for both (only the first is used)
-                cutoffHigh = cutoffLow;
+            // Parse frequency
+            frequency = std::stod(fFrequencyInput->getText());
+            frequency = std::max(20.0, std::min(20000.0, frequency));  // Clamp to audible range
+            
+            // Parse Q
+            Q = std::stod(fQInput->getText());
+            Q = std::max(0.1, std::min(30.0, Q));  // Reasonable Q range
+            
+            // Parse gain for peak/shelf filters
+            if (fGainDBInput->isVisible()) {
+                gainDB = std::stod(fGainDBInput->getText());
+                gainDB = std::max(-30.0, std::min(30.0, gainDB));  // Reasonable gain range
+            }
+            
+            // Parse bandwidth for peak/shelf filters
+            if (fBandwidthInput->isVisible()) {
+                bandwidth = std::stod(fBandwidthInput->getText());
+                bandwidth = std::max(0.1, std::min(4.0, bandwidth));  // Reasonable bandwidth range
             }
         } catch (const std::exception& e) {
-            std::cout << "Error parsing cutoff frequencies: " << e.what() << std::endl;
+            std::cout << "Error parsing filter parameters: " << e.what() << std::endl;
             return;
-        }
-        
-        // Parse filter order
-        int order = 4;  // Default
-        try {
-            order = std::stoi(fOrderInput->getText());
-            order = std::max(1, std::min(20, order));  // Limit order to reasonable range
-        } catch (const std::exception& e) {
-            std::cout << "Error parsing filter order: " << e.what() << std::endl;
-            return;
-        }
-        
-        // Parse ripple (for Chebyshev)
-        double ripple = 0.5;  // Default
-        if (filterType == FilterGenerator::CHEBYSHEV) {
-            try {
-                ripple = std::stod(fRippleInput->getText());
-                ripple = std::max(0.1, std::min(6.0, ripple));  // Limit ripple to reasonable range
-            } catch (const std::exception& e) {
-                std::cout << "Error parsing ripple: " << e.what() << std::endl;
-                return;
-            }
         }
         
         // Generate filter coefficients
         std::pair<std::vector<double>, std::vector<double>> coeffs = 
-            fFilterGenerator->generateFilter(filterType, responseType, cutoffLow, cutoffHigh, order, ripple);
+            fRBJFilterGenerator->generateFilter(filterType, frequency, Q, gainDB, bandwidth);
         
         // Update the filter coefficients
         fNumerator = coeffs.first;
@@ -2799,7 +2117,7 @@ class FildesUI : public UI,
         setState("topTF", numStr.c_str());
         setState("bottomTF", denStr.c_str());
         
-        std::cout << "Filter generated successfully!" << std::endl;
+        std::cout << "RBJ filter generated successfully!" << std::endl;
     }
  };
  

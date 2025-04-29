@@ -99,6 +99,7 @@ public:
         virtual void setTF(std::string newText) = 0;
         virtual void focus(EditableText* current) = 0;
         virtual void setGain(std::string gainStr) = 0;
+        virtual void generateIfTracking(void) = 0;
     };
 
     explicit EditableText(SubWidget* const parent, std::string type)
@@ -255,8 +256,11 @@ protected:
                     this->setFocused(false); // Lose focus on Enter
                     repaint();
                 }
-                if (fCallback && fType != " ") {
-                    fCallback->setTF(fType + fText);
+                if (fCallback) {
+                    if (fType != " ")
+                        fCallback->setTF(fType + fText);
+                    else
+                        fCallback->generateIfTracking();
                 }
             }
         }
