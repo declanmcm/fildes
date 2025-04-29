@@ -178,7 +178,7 @@ public:
         numCoeffsTop = numCoeffsBottom = ini = outi = xz1 = xz2 = yz1 = yz2 = 0;
 		std::cout << "Fildes\n" << std::flush;
 
-		std::memcpy(topTF, acoeff, sizeof(acoeff));
+		//std::memcpy(topTF, acoeff, sizeof(acoeff));
 		gain = 1;
 		//std::memcpy(bottomTF, bcoeff, sizeof(bcoeff));
 
@@ -337,34 +337,39 @@ public:
             return;
         }
 
+        int found = 0;
+        double outputCopy[frames];
+
         for (int i = 0; i < frames; i++) {
             double res = 0;
             
             if (i > 98) {
                 for (int j = 0; j < 100; j++) {
                     res += (double)inputs[0][i - j] * topTF[j];
-                    if (j != 0) res -= (double)outputs[0][i - j] * bottomTF[j];
+                    if (j != 0) res -= (double)outputCopy[i - j] * bottomTF[j];
                 }
                 if (frames - i <= 100) {
-                    inMem[(ini + 1) % 100] = (double)inputs[0][i];
-                    outMem[(outi + 1) % 100] = res;
+                    inMem[(++ini) % 100] = (double)inputs[0][i];
+                    outMem[(++outi) % 100] = res;
                 }
             } else {
                 for (int j = 0; j < i + 1; j++) {
                     res += (double)inputs[0][i - j] * topTF[j];
-                    if (j != 0) res -= (double)outputs[0][i - j] * bottomTF[j];
+                    if (j != 0) res -= (double)outputCopy[i - j] * bottomTF[j];
                 }
                 for (int j = 0; j < 99 - i; j++) {
                     int inIndex = (ini - j) % 100;
                     int outIndex = (outi - j) % 100;
                     res += inMem[inIndex] * topTF[i + 1 + j];
-                    if (j != 0) res -= outMem[outIndex] * bottomTF[j];
+                    if (i + 1 + j != 0) res -= outMem[outIndex] * bottomTF[i + 1 + j];
                 }
             }
 
             outputs[0][i] = res * gain;
+            outputCopy[i] = res * gain;
         }
     }
+
 };
 
 Plugin* createPlugin()

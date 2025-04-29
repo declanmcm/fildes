@@ -27,9 +27,8 @@
  #include <vector>
  #include <cmath>
  #include "Eigen/Eigen"
- 
- // Add to FildesUI.cpp before the FildesUI class
 
+ 
 // FilterGenerator class - responsible for calculating filter coefficients
 class FilterGenerator {
     public:
@@ -59,7 +58,7 @@ class FilterGenerator {
             double cutoffLow,
             double cutoffHigh,
             int order,
-            double ripple = 0.5)  // Ripple in dB for Chebyshev filters
+            double ripple = 0.5)
         {
             // Normalize frequencies to [0, 1] range (relative to Nyquist)
             double normalizedLow = cutoffLow / (mSampleRate / 2.0);
@@ -71,46 +70,66 @@ class FilterGenerator {
             
             // Ensure normalizedHigh > normalizedLow for band filters
             if ((responseType == BAND_PASS || responseType == BAND_STOP) && normalizedHigh <= normalizedLow) {
-                std::swap(normalizedLow, normalizedHigh);
+                double temp = normalizedLow;
+                normalizedLow = normalizedHigh * 0.9; // Ensure separation
+                normalizedHigh = temp * 1.1;
             }
             
             std::vector<double> numerator, denominator;
             
-            // Basic error checking on filter order
-            order = std::max(1, std::min(20, order));
+            // Adjust filter order for band filters
+            int effectiveOrder = order;
+            if (responseType == BAND_PASS || responseType == BAND_STOP) {
+                // For band filters, the effective order is doubled
+                effectiveOrder = std::max(1, std::min(10, order)); // Limit order more strictly for band filters
+            } else {
+                effectiveOrder = std::max(1, std::min(20, order));
+            }
             
             // Generate appropriate filter based on type
             if (filterType == BUTTERWORTH) {
                 switch (responseType) {
                     case LOW_PASS:
-                        generateButterworthLowPass(normalizedLow, order, numerator, denominator);
+                        generateButterworthLowPass(normalizedLow, effectiveOrder, numerator, denominator);
                         break;
                     case HIGH_PASS:
-                        generateButterworthHighPass(normalizedLow, order, numerator, denominator);
+                        generateButterworthHighPass(normalizedLow, effectiveOrder, numerator, denominator);
                         break;
                     case BAND_PASS:
-                        generateButterworthBandPass(normalizedLow, normalizedHigh, order, numerator, denominator);
+                        generateButterworthBandPass(normalizedLow, normalizedHigh, effectiveOrder, numerator, denominator);
                         break;
                     case BAND_STOP:
-                        generateButterworthBandStop(normalizedLow, normalizedHigh, order, numerator, denominator);
+                        generateButterworthBandStop(normalizedLow, normalizedHigh, effectiveOrder, numerator, denominator);
                         break;
                 }
+            
+            // Clean up small coefficients that might be numerical artifacts
+            for (double& c : numerator) {
+                if (std::abs(c) < 1e-12) c = 0.0;
+            }
+            
+            for (double& c : denominator) {
+                if (std::abs(c) < 1e-12) c = 0.0;
+            }
             } else {  // CHEBYSHEV
                 switch (responseType) {
                     case LOW_PASS:
-                        generateChebyshevLowPass(normalizedLow, order, ripple, numerator, denominator);
+                        generateChebyshevLowPass(normalizedLow, effectiveOrder, ripple, numerator, denominator);
                         break;
                     case HIGH_PASS:
-                        generateChebyshevHighPass(normalizedLow, order, ripple, numerator, denominator);
+                        generateChebyshevHighPass(normalizedLow, effectiveOrder, ripple, numerator, denominator);
                         break;
                     case BAND_PASS:
-                        generateChebyshevBandPass(normalizedLow, normalizedHigh, order, ripple, numerator, denominator);
+                        generateChebyshevBandPass(normalizedLow, normalizedHigh, effectiveOrder, ripple, numerator, denominator);
                         break;
                     case BAND_STOP:
-                        generateChebyshevBandStop(normalizedLow, normalizedHigh, order, ripple, numerator, denominator);
+                        generateChebyshevBandStop(normalizedLow, normalizedHigh, effectiveOrder, ripple, numerator, denominator);
                         break;
                 }
             }
+            
+            // Apply gain normalization to prevent tiny coefficients
+            normalizeFilterGain(numerator, denominator, responseType, normalizedLow, normalizedHigh);
             
             // Debug output
             std::cout << "Generated filter coefficients:" << std::endl;
@@ -127,465 +146,38 @@ class FilterGenerator {
     private:
         double mSampleRate;
         
-        // Butterworth filter implementations
-        void generateButterworthLowPass(double cutoff, int order, 
-                                       std::vector<double>& numerator, 
-                                       std::vector<double>& denominator) {
-            // Bilinear transform variables
-            double wc = 2.0 * std::tan(M_PI * cutoff / 2.0);
-            
-            // Initialize arrays for analog filter coefficients
-            std::vector<std::complex<double>> poles;
-            
-            // Generate analog Butterworth poles
-            for (int i = 0; i < order; i++) {
-                double theta = M_PI * (2.0 * i + 1) / (2.0 * order);
-                std::complex<double> pole(-std::sin(theta), std::cos(theta));
-                poles.push_back(pole);
+        // Normalize filter gain to prevent tiny coefficients at high orders
+        void normalizeFilterGain(std::vector<double>& numerator, std::vector<double>& denominator, 
+                                 ResponseType responseType, double f1, double f2) {
+            // Evaluate filter at key frequency
+            double evalFreq;
+            if (responseType == LOW_PASS) {
+                evalFreq = 0.0; // DC
+            } else if (responseType == HIGH_PASS) {
+                evalFreq = 0.5; // Nyquist
+            } else if (responseType == BAND_PASS) {
+                evalFreq = (f1 + f2) / 2.0; // Center frequency
+            } else { // BAND_STOP
+                evalFreq = 0.0; // DC
             }
             
-            // Apply frequency scaling
-            for (auto& pole : poles) {
-                pole *= wc;
-            }
+            // Calculate response at target frequency
+            double omega = 2.0 * M_PI * evalFreq;
+            std::complex<double> response = evaluateFilter(numerator, denominator, omega);
+            double magnitude = std::abs(response);
             
-            // Convert to digital filter via bilinear transform
-            numerator.clear();
-            denominator.clear();
-            
-            // Start with simplest case - gain term only in numerator
-            numerator.push_back(1.0);
-            denominator.push_back(1.0);
-            
-            // Process each pole pair
-            for (size_t i = 0; i < poles.size(); i++) {
-                // For complex poles, process with conjugate pair
-                if (std::abs(poles[i].imag()) > 1e-10) {
-                    // Check if we have its conjugate in the list
-                    bool hasConjugate = false;
-                    size_t conjIndex = 0;
-                    
-                    for (size_t j = i + 1; j < poles.size(); j++) {
-                        if (std::abs(poles[j].real() - poles[i].real()) < 1e-10 &&
-                            std::abs(poles[j].imag() + poles[i].imag()) < 1e-10) {
-                            hasConjugate = true;
-                            conjIndex = j;
-                            break;
-                        }
-                    }
-                    
-                    if (hasConjugate) {
-                        // Process this complex pole pair
-                        applyBilinearTransformComplexPole(poles[i], numerator, denominator);
-                        
-                        // Skip the conjugate since we've processed it
-                        poles[conjIndex] = std::complex<double>(0, 0);
-                    }
-                } else if (std::abs(poles[i].real()) > 1e-10 || std::abs(poles[i].imag()) > 1e-10) {
-                    // Process real pole
-                    applyBilinearTransformRealPole(poles[i].real(), numerator, denominator);
-                }
-            }
-            
-            // Normalize to make first denominator coefficient 1.0
-            if (!denominator.empty() && std::abs(denominator[0]) > 1e-10) {
-                double scale = denominator[0];
-                for (double& c : denominator) c /= scale;
-                for (double& c : numerator) c /= scale;
-            }
-            
-            // For Butterworth lowpass, normalize to have DC gain = 1
-            double dcGain = 0.0;
-            for (double c : numerator) dcGain += c;
-            double dcDenom = 0.0;
-            for (double c : denominator) dcDenom += c;
-            
-            if (std::abs(dcGain) > 1e-10) {
-                double scale = dcGain / dcDenom;
-                for (double& c : numerator) c /= scale;
-            }
-        }
-        
-        void generateButterworthHighPass(double cutoff, int order, 
-                                        std::vector<double>& numerator, 
-                                        std::vector<double>& denominator) {
-            // Generate lowpass filter first
-            generateButterworthLowPass(cutoff, order, numerator, denominator);
-            
-            // Transform lowpass to highpass by applying spectral inversion
-            // For each z^-k term, replace with (-1)^k * z^-k
-            for (size_t i = 0; i < numerator.size(); i++) {
-                if (i % 2 == 1) {  // Odd powers of z^-1
-                    numerator[i] = -numerator[i];
-                }
-            }
-            
-            for (size_t i = 1; i < denominator.size(); i++) {
-                if (i % 2 == 1) {  // Odd powers of z^-1
-                    denominator[i] = -denominator[i];
-                }
-            }
-            
-            // Scale for unity gain at Nyquist
-            double nyquistGain = 0.0;
-            double nyquistDenom = 0.0;
-            
-            for (size_t i = 0; i < numerator.size(); i++) {
-                nyquistGain += (i % 2 == 0) ? numerator[i] : -numerator[i];
-            }
-            
-            for (size_t i = 0; i < denominator.size(); i++) {
-                nyquistDenom += (i % 2 == 0) ? denominator[i] : -denominator[i];
-            }
-            
-            if (std::abs(nyquistGain) > 1e-10) {
-                double scale = nyquistGain / nyquistDenom;
-                for (double& c : numerator) c /= scale;
-            }
-        }
-        
-        void generateButterworthBandPass(double cutoffLow, double cutoffHigh, int order, 
-                                        std::vector<double>& numerator, 
-                                        std::vector<double>& denominator) {
-            // Generate lowpass prototype
-            std::vector<double> lpNum, lpDen;
-            generateButterworthLowPass(0.5, order, lpNum, lpDen);
-            
-            // Calculate band transformation parameters
-            double wl = 2.0 * std::tan(M_PI * cutoffLow / 2.0);
-            double wh = 2.0 * std::tan(M_PI * cutoffHigh / 2.0);
-            double w0 = std::sqrt(wl * wh);
-            double bw = wh - wl;
-            
-            // Create bandpass from lowpass using frequency transformation
-            // This is an approximation for demonstration purposes
-            numerator.clear();
-            denominator.clear();
-            
-            // Start with simple bandpass from second-order sections
-            numerator.resize(2 * order + 1, 0.0);
-            denominator.resize(2 * order + 1, 0.0);
-            
-            // Set up bandpass structure (simplified)
-            numerator[order] = 1.0;  // Center coefficient
-            denominator[0] = 1.0;
-            
-            // Basic bandpass coefficients (would need proper transformation in real code)
-            double alpha = std::cos(M_PI * (cutoffHigh + cutoffLow)) / std::cos(M_PI * (cutoffHigh - cutoffLow));
-            double beta = std::tan(M_PI * (cutoffHigh - cutoffLow) / 2.0);
-            
-            // Apply to each second-order section
-            for (int i = 1; i <= order; i++) {
-                double theta = M_PI * (2.0 * i - 1) / (2.0 * order);
-                double realPole = -std::sin(theta);
-                double imagPole = std::cos(theta);
+            // Normalize if magnitude is very small or large
+            if (magnitude < 0.01 || magnitude > 100.0) {
+                double scale = (responseType == BAND_STOP) ? 1.0 / magnitude : 1.0;
                 
-                // Convert analog poles to digital
-                double a = 1.0 / (1.0 + beta * realPole + beta * beta);
-                double b0 = a;
-                double b1 = -2.0 * alpha * a;
-                double b2 = (1.0 - beta * realPole + beta * beta) * a;
-                
-                // Apply to the overall filter (simplified)
-                denominator[i] += b1;
-                denominator[i+order] += b2;
-            }
-            
-            // Normalize gain at center frequency
-            double centerGain = evaluateGain(numerator, denominator, (cutoffLow + cutoffHigh) / 2.0);
-            if (std::abs(centerGain) > 1e-10) {
-                for (double& c : numerator) c /= centerGain;
-            }
-        }
-        
-        void generateButterworthBandStop(double cutoffLow, double cutoffHigh, int order, 
-                                        std::vector<double>& numerator, 
-                                        std::vector<double>& denominator) {
-            // Generate bandpass filter first
-            generateButterworthBandPass(cutoffLow, cutoffHigh, order, numerator, denominator);
-            
-            // Transform bandpass to bandstop by spectral inversion
-            // Basically, negate all coefficients except the first one
-            for (size_t i = 1; i < numerator.size(); i++) {
-                numerator[i] = -numerator[i];
-            }
-            
-            for (size_t i = 1; i < denominator.size(); i++) {
-                denominator[i] = -denominator[i];
-            }
-            
-            // Adjust gain at DC
-            double dcGain = 0.0;
-            for (double c : numerator) dcGain += c;
-            double dcDenom = 0.0;
-            for (double c : denominator) dcDenom += c;
-            
-            if (std::abs(dcGain) > 1e-10) {
-                double scale = dcGain / dcDenom;
-                for (double& c : numerator) c /= scale;
-            }
-        }
-        
-        // Chebyshev filter implementations
-        void generateChebyshevLowPass(double cutoff, int order, double ripple,
-                                     std::vector<double>& numerator, 
-                                     std::vector<double>& denominator) {
-            // Bilinear transform variables
-            double wc = 2.0 * std::tan(M_PI * cutoff / 2.0);
-            
-            // Chebyshev parameter
-            double eps = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
-            double v0 = std::asinh(1.0 / eps) / order;
-            double sinh_v0 = std::sinh(v0);
-            double cosh_v0 = std::cosh(v0);
-            
-            // Initialize arrays for analog filter coefficients
-            std::vector<std::complex<double>> poles;
-            
-            // Generate Chebyshev poles
-            for (int i = 0; i < order; i++) {
-                double theta = M_PI * (2.0 * i + 1) / (2.0 * order);
-                double real = -sinh_v0 * std::sin(theta);
-                double imag = cosh_v0 * std::cos(theta);
-                
-                poles.push_back(std::complex<double>(real, imag));
-            }
-            
-            // Apply frequency scaling
-            for (auto& pole : poles) {
-                pole *= wc;
-            }
-            
-            // Convert to digital filter via bilinear transform
-            numerator.clear();
-            denominator.clear();
-            
-            // Start with simplest case - gain term only in numerator
-            numerator.push_back(1.0);
-            denominator.push_back(1.0);
-            
-            // Process each pole pair
-            for (size_t i = 0; i < poles.size(); i++) {
-                // For complex poles, process with conjugate pair
-                if (std::abs(poles[i].imag()) > 1e-10) {
-                    // Check if we have its conjugate in the list
-                    bool hasConjugate = false;
-                    size_t conjIndex = 0;
-                    
-                    for (size_t j = i + 1; j < poles.size(); j++) {
-                        if (std::abs(poles[j].real() - poles[i].real()) < 1e-10 &&
-                            std::abs(poles[j].imag() + poles[i].imag()) < 1e-10) {
-                            hasConjugate = true;
-                            conjIndex = j;
-                            break;
-                        }
-                    }
-                    
-                    if (hasConjugate) {
-                        // Process this complex pole pair
-                        applyBilinearTransformComplexPole(poles[i], numerator, denominator);
-                        
-                        // Skip the conjugate since we've processed it
-                        poles[conjIndex] = std::complex<double>(0, 0);
-                    }
-                } else if (std::abs(poles[i].real()) > 1e-10 || std::abs(poles[i].imag()) > 1e-10) {
-                    // Process real pole
-                    applyBilinearTransformRealPole(poles[i].real(), numerator, denominator);
+                // Apply scale to numerator
+                for (double& c : numerator) {
+                    c *= scale;
                 }
             }
-            
-            // Normalize to make first denominator coefficient 1.0
-            if (!denominator.empty() && std::abs(denominator[0]) > 1e-10) {
-                double scale = denominator[0];
-                for (double& c : denominator) c /= scale;
-                for (double& c : numerator) c /= scale;
-            }
-            
-            // For Chebyshev lowpass, set passband gain based on ripple
-            double scale;
-            if (order % 2 == 0) {
-                // Even-order Chebyshev has a gain of 1/(1+eps^2)^(1/2) at DC
-                scale = 1.0 / std::sqrt(1.0 + eps * eps);
-            } else {
-                // Odd-order Chebyshev has a gain of 1 at DC
-                scale = 1.0;
-            }
-            
-            double dcGain = 0.0;
-            for (double c : numerator) dcGain += c;
-            double dcDenom = 0.0;
-            for (double c : denominator) dcDenom += c;
-            
-            if (std::abs(dcGain) > 1e-10) {
-                scale *= dcDenom / dcGain;
-                for (double& c : numerator) c *= scale;
-            }
         }
         
-        void generateChebyshevHighPass(double cutoff, int order, double ripple,
-                                      std::vector<double>& numerator, 
-                                      std::vector<double>& denominator) {
-            // Generate lowpass filter first
-            generateChebyshevLowPass(cutoff, order, ripple, numerator, denominator);
-            
-            // Transform lowpass to highpass by applying spectral inversion
-            for (size_t i = 0; i < numerator.size(); i++) {
-                if (i % 2 == 1) {
-                    numerator[i] = -numerator[i];
-                }
-            }
-            
-            for (size_t i = 1; i < denominator.size(); i++) {
-                if (i % 2 == 1) {
-                    denominator[i] = -denominator[i];
-                }
-            }
-            
-            // Scale for appropriate gain at Nyquist
-            double nyquistGain = 0.0;
-            double nyquistDenom = 0.0;
-            
-            for (size_t i = 0; i < numerator.size(); i++) {
-                nyquistGain += (i % 2 == 0) ? numerator[i] : -numerator[i];
-            }
-            
-            for (size_t i = 0; i < denominator.size(); i++) {
-                nyquistDenom += (i % 2 == 0) ? denominator[i] : -denominator[i];
-            }
-            
-            if (std::abs(nyquistGain) > 1e-10) {
-                double scale = nyquistGain / nyquistDenom;
-                for (double& c : numerator) c /= scale;
-            }
-        }
-        
-        void generateChebyshevBandPass(double cutoffLow, double cutoffHigh, int order, double ripple,
-                                      std::vector<double>& numerator, 
-                                      std::vector<double>& denominator) {
-            // Similar to Butterworth bandpass but with Chebyshev prototype
-            std::vector<double> lpNum, lpDen;
-            generateChebyshevLowPass(0.5, order, ripple, lpNum, lpDen);
-            
-            // Apply bandpass transformation (simplified)
-            // Using similar approach as Butterworth for demonstration
-            generateButterworthBandPass(cutoffLow, cutoffHigh, order, numerator, denominator);
-        }
-        
-        void generateChebyshevBandStop(double cutoffLow, double cutoffHigh, int order, double ripple,
-                                      std::vector<double>& numerator, 
-                                      std::vector<double>& denominator) {
-            // Similar to Butterworth bandstop but with Chebyshev prototype
-            generateChebyshevBandPass(cutoffLow, cutoffHigh, order, ripple, numerator, denominator);
-            
-            // Transform bandpass to bandstop
-            for (size_t i = 1; i < numerator.size(); i++) {
-                numerator[i] = -numerator[i];
-            }
-            
-            for (size_t i = 1; i < denominator.size(); i++) {
-                denominator[i] = -denominator[i];
-            }
-            
-            // Adjust gain at DC
-            double dcGain = 0.0;
-            for (double c : numerator) dcGain += c;
-            double dcDenom = 0.0;
-            for (double c : denominator) dcDenom += c;
-            
-            if (std::abs(dcGain) > 1e-10) {
-                double scale = dcGain / dcDenom;
-                for (double& c : numerator) c /= scale;
-            }
-        }
-        
-        // Helper functions for bilinear transform
-        void applyBilinearTransformRealPole(double pole, 
-                                          std::vector<double>& numerator, 
-                                          std::vector<double>& denominator) {
-            // Convert analog s-domain pole to digital z-domain
-            // s = pole becomes (z-1)/(z+1) = pole
-            // Solving for z: z = (1+pole)/(1-pole)
-            
-            // For first-order section with real pole a:
-            // H(z) = (b0 + b1*z^-1)/(1 + a1*z^-1)
-            
-            double a = -pole;
-            double b0 = 1.0;
-            double b1 = 1.0;
-            double a1 = (1.0 - a) / (1.0 + a);
-            double gain = (1.0 + a1) / (b0 + b1);
-            
-            b0 *= gain;
-            b1 *= gain;
-            
-            // Convolve with existing filter
-            std::vector<double> newNumerator(numerator.size() + 1, 0.0);
-            std::vector<double> newDenominator(denominator.size() + 1, 0.0);
-            
-            for (size_t i = 0; i < numerator.size(); i++) {
-                newNumerator[i] += b0 * numerator[i];
-                newNumerator[i+1] += b1 * numerator[i];
-            }
-            
-            for (size_t i = 0; i < denominator.size(); i++) {
-                newDenominator[i] += denominator[i];
-                newDenominator[i+1] += a1 * denominator[i];
-            }
-            
-            numerator = newNumerator;
-            denominator = newDenominator;
-        }
-        
-        void applyBilinearTransformComplexPole(const std::complex<double>& pole, 
-                                             std::vector<double>& numerator, 
-                                             std::vector<double>& denominator) {
-            // For second-order section with complex conjugate poles:
-            // H(z) = (b0 + b1*z^-1 + b2*z^-2)/(1 + a1*z^-1 + a2*z^-2)
-            
-            double a = -2.0 * pole.real();
-            double b = std::norm(pole);  // |pole|^2
-            
-            // Bilinear transform coefficients
-            double k = 1.0 / (1.0 + a + b);
-            double a1 = 2.0 * (b - 1.0) * k;
-            double a2 = (1.0 - a + b) * k;
-            
-            double b0 = 1.0;
-            double b1 = 2.0;
-            double b2 = 1.0;
-            
-            // Normalize gain
-            double gain = (1.0 + a1 + a2) / (b0 + b1 + b2);
-            b0 *= gain;
-            b1 *= gain;
-            b2 *= gain;
-            
-            // Convolve with existing filter
-            std::vector<double> newNumerator(numerator.size() + 2, 0.0);
-            std::vector<double> newDenominator(denominator.size() + 2, 0.0);
-            
-            for (size_t i = 0; i < numerator.size(); i++) {
-                newNumerator[i] += b0 * numerator[i];
-                newNumerator[i+1] += b1 * numerator[i];
-                newNumerator[i+2] += b2 * numerator[i];
-            }
-            
-            for (size_t i = 0; i < denominator.size(); i++) {
-                newDenominator[i] += denominator[i];
-                newDenominator[i+1] += a1 * denominator[i];
-                newDenominator[i+2] += a2 * denominator[i];
-            }
-            
-            numerator = newNumerator;
-            denominator = newDenominator;
-        }
-        
-        // Evaluate filter gain at specific frequency
-        double evaluateGain(const std::vector<double>& num, const std::vector<double>& den, double freq) {
-            // Convert frequency to radians
-            double omega = 2.0 * M_PI * freq;
-            
-            // Evaluate frequency response
+        std::complex<double> evaluateFilter(const std::vector<double>& num, const std::vector<double>& den, double omega) {
             std::complex<double> numerator(0.0, 0.0);
             std::complex<double> denominator(0.0, 0.0);
             
@@ -601,12 +193,676 @@ class FilterGenerator {
                 denominator += den[i] * z;
             }
             
-            // Return magnitude
             if (std::abs(denominator) > 1e-10) {
-                return std::abs(numerator / denominator);
+                return numerator / denominator;
             }
             
-            return 0.0;
+            return std::complex<double>(0.0, 0.0);
+        }
+        
+        // Butterworth filter implementations
+        void generateButterworthLowPass(double cutoff, int order, 
+                                       std::vector<double>& numerator, 
+                                       std::vector<double>& denominator) {
+            // Calculate prewarped analog frequency
+            double omega_c = 2 * tan(M_PI * cutoff / 2);
+            
+            // Generate analog prototype poles
+            std::vector<std::complex<double>> poles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sin(theta);
+                double im = cos(theta);
+                poles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Map analog poles to digital using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : poles) {
+                // Scale by cutoff frequency
+                std::complex<double> scaledPole = p * omega_c;
+                
+                // Apply bilinear transform: z = (1 + s)/(1 - s)
+                std::complex<double> digitalPole = (1.0 + scaledPole) / (1.0 - scaledPole);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            // Convert poles to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, {}, numerator, denominator);
+            
+            // Add scaling to make DC gain = 1
+            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
+            for (double& n : numerator) {
+                n /= dcGain;
+            }
+        }
+        
+        void generateButterworthHighPass(double cutoff, int order, 
+                                        std::vector<double>& numerator, 
+                                        std::vector<double>& denominator) {
+            // Calculate prewarped analog frequency
+            double omega_c = 2.0 * tan(M_PI * cutoff / 2.0);
+            
+            // Generate analog prototype poles (same as lowpass)
+            std::vector<std::complex<double>> poles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sin(theta);
+                double im = cos(theta);
+                poles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Highpass transformation: replace s with 1/s in analog domain
+            std::vector<std::complex<double>> hpPoles;
+            for (const auto& p : poles) {
+                // s -> 1/s transformation
+                std::complex<double> hpPole = 1.0 / p;
+                
+                // Scale by cutoff frequency
+                hpPole = hpPole * omega_c;
+                hpPoles.push_back(hpPole);
+            }
+            
+            // Create zeros at z=1 (s=0)
+            std::vector<std::complex<double>> zeros(order, 1.0);
+            
+            // Map to digital domain using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : hpPoles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            std::vector<std::complex<double>> digitalZeros;
+            for (const auto& z : zeros) {
+                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
+                digitalZeros.push_back(digitalZero);
+            }
+            
+            // Convert to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
+            
+            // Adjust gain to have unity gain at Nyquist frequency
+            double nyquistGain = 0.0;
+            double sign = 1.0;
+            for (double n : numerator) {
+                nyquistGain += n * sign;
+                sign = -sign;
+            }
+            
+            sign = 1.0;
+            double nyquistDenom = 0.0;
+            for (double d : denominator) {
+                nyquistDenom += d * sign;
+                sign = -sign;
+            }
+            
+            if (std::abs(nyquistDenom) > 1e-10) {
+                double gain = nyquistDenom / nyquistGain;
+                for (double& n : numerator) {
+                    n *= gain;
+                }
+            }
+        }
+        
+        void generateButterworthBandPass(double cutoffLow, double cutoffHigh, int order, 
+                                        std::vector<double>& numerator, 
+                                        std::vector<double>& denominator) {
+            // Calculate center frequency and bandwidth
+            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
+            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
+            
+            // Generate analog prototype poles
+            std::vector<std::complex<double>> protoPoles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sin(theta);
+                double im = cos(theta);
+                protoPoles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Apply bandpass transformation to each pole
+            std::vector<std::complex<double>> bpPoles;
+            std::vector<std::complex<double>> bpZeros;
+            
+            for (const auto& p : protoPoles) {
+                // For each LP prototype pole p, the bandpass transformation creates two poles:
+                // p1 = (p*BW/2) + sqrt((p*BW/2)^2 - omega0^2)
+                // p2 = (p*BW/2) - sqrt((p*BW/2)^2 - omega0^2)
+                
+                std::complex<double> scaled_p = p * bandwidth / 2.0;
+                std::complex<double> discriminant = scaled_p * scaled_p - omega0 * omega0;
+                std::complex<double> sqrt_disc = std::sqrt(discriminant);
+                
+                bpPoles.push_back(scaled_p + sqrt_disc);
+                bpPoles.push_back(scaled_p - sqrt_disc);
+                
+                // Each BP filter also has zeros at s=0 (DC) and s=infinity
+                bpZeros.push_back(std::complex<double>(0.0, 0.0));  // DC zero
+            }
+            
+            // Add zeros at infinity (implemented by making numerator 1 degree less than denominator)
+            
+            // Convert to digital domain using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : bpPoles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            std::vector<std::complex<double>> digitalZeros;
+            for (const auto& z : bpZeros) {
+                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
+                digitalZeros.push_back(digitalZero);
+            }
+            
+            // Add zeros at z=-1 (Nyquist) to match order
+            for (int i = 0; i < order; i++) {
+                digitalZeros.push_back(std::complex<double>(-1.0, 0.0));
+            }
+            
+            // Convert to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
+            
+            // Normalize gain at center frequency
+            double centerFreq = (cutoffLow + cutoffHigh) / 2.0;
+            double omega = 2.0 * M_PI * centerFreq;
+            std::complex<double> response = evaluateFilter(numerator, denominator, omega);
+            double magnitude = std::abs(response);
+            
+            if (magnitude > 1e-10) {
+                double gain = 1.0 / magnitude;
+                for (double& n : numerator) {
+                    n *= gain;
+                }
+            }
+        }
+        
+        void generateButterworthBandStop(double cutoffLow, double cutoffHigh, int order, 
+                                        std::vector<double>& numerator, 
+                                        std::vector<double>& denominator) {
+            // Calculate center frequency and bandwidth
+            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
+            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
+            
+            // Generate analog prototype poles
+            std::vector<std::complex<double>> protoPoles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sin(theta);
+                double im = cos(theta);
+                protoPoles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Apply bandstop transformation to each pole
+            std::vector<std::complex<double>> bsPoles;
+            std::vector<std::complex<double>> bsZeros;
+            
+            for (const auto& p : protoPoles) {
+                // For each LP prototype pole p, the bandstop transformation creates two poles:
+                // p1 = (BW/2)/p + sqrt((BW/2)^2/p^2 - omega0^2)
+                // p2 = (BW/2)/p - sqrt((BW/2)^2/p^2 - omega0^2)
+                
+                std::complex<double> inv_p = bandwidth / (2.0 * p);
+                std::complex<double> discriminant = (inv_p * inv_p) - (omega0 * omega0);
+                std::complex<double> sqrt_disc = std::sqrt(discriminant);
+                
+                bsPoles.push_back(inv_p + sqrt_disc);
+                bsPoles.push_back(inv_p - sqrt_disc);
+                
+                // Each BS filter has zeros on imaginary axis at +/- j*omega0
+                bsZeros.push_back(std::complex<double>(0.0, omega0));
+                bsZeros.push_back(std::complex<double>(0.0, -omega0));
+            }
+            
+            // Convert to digital domain using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : bsPoles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            std::vector<std::complex<double>> digitalZeros;
+            for (const auto& z : bsZeros) {
+                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
+                digitalZeros.push_back(digitalZero);
+            }
+            
+            // Convert to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
+            
+            // Normalize gain at DC
+            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
+            for (double& n : numerator) {
+                n /= dcGain;
+            }
+        }
+        
+        // Chebyshev filter implementations
+        void generateChebyshevLowPass(double cutoff, int order, double ripple,
+                                     std::vector<double>& numerator, 
+                                     std::vector<double>& denominator) {
+            // Convert ripple from dB to epsilon
+            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
+            
+            // Calculate alpha value
+            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
+            double sinh_alpha = sinh(alpha);
+            double cosh_alpha = cosh(alpha);
+            
+            // Generate Chebyshev poles
+            std::vector<std::complex<double>> poles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sinh_alpha * sin(theta);
+                double im = cosh_alpha * cos(theta);
+                poles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Calculate prewarped analog frequency
+            double omega_c = 2.0 * tan(M_PI * cutoff / 2.0);
+            
+            // Scale poles by cutoff frequency
+            for (auto& p : poles) {
+                p *= omega_c;
+            }
+            
+            // Map analog poles to digital using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : poles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            // Convert poles to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, {}, numerator, denominator);
+            
+            // Adjust gain to get proper passband ripple
+            double H0 = 1.0;
+            if (order % 2 == 0) {  // even order
+                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
+            }
+            
+            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
+            for (double& n : numerator) {
+                n *= H0 / dcGain;
+            }
+        }
+        
+        void generateChebyshevHighPass(double cutoff, int order, double ripple,
+                                      std::vector<double>& numerator, 
+                                      std::vector<double>& denominator) {
+            // Convert ripple from dB to epsilon
+            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
+            
+            // Calculate alpha value
+            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
+            double sinh_alpha = sinh(alpha);
+            double cosh_alpha = cosh(alpha);
+            
+            // Generate Chebyshev poles
+            std::vector<std::complex<double>> poles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sinh_alpha * sin(theta);
+                double im = cosh_alpha * cos(theta);
+                poles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Highpass transformation: replace s with 1/s in analog domain
+            std::vector<std::complex<double>> hpPoles;
+            for (const auto& p : poles) {
+                hpPoles.push_back(1.0 / p);
+            }
+            
+            // Calculate prewarped analog frequency
+            double omega_c = 2.0 * tan(M_PI * cutoff / 2.0);
+            
+            // Scale poles by cutoff frequency
+            for (auto& p : hpPoles) {
+                p *= omega_c;
+            }
+            
+            // Create zeros at z=1 (s=0)
+            std::vector<std::complex<double>> zeros(order, 1.0);
+            
+            // Map to digital domain using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : hpPoles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            std::vector<std::complex<double>> digitalZeros;
+            for (const auto& z : zeros) {
+                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
+                digitalZeros.push_back(digitalZero);
+            }
+            
+            // Convert to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
+            
+            // Adjust gain for proper stopband ripple at Nyquist
+            double H0 = 1.0;
+            if (order % 2 == 0) {  // even order
+                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
+            }
+            
+            // Evaluate gain at Nyquist
+            double nyquistGain = 0.0;
+            double sign = 1.0;
+            for (double n : numerator) {
+                nyquistGain += n * sign;
+                sign = -sign;
+            }
+            
+            sign = 1.0;
+            double nyquistDenom = 0.0;
+            for (double d : denominator) {
+                nyquistDenom += d * sign;
+                sign = -sign;
+            }
+            
+            double gain = H0 * nyquistDenom / nyquistGain;
+            for (double& n : numerator) {
+                n *= gain;
+            }
+        }
+        
+        void generateChebyshevBandPass(double cutoffLow, double cutoffHigh, int order, double ripple,
+                                      std::vector<double>& numerator, 
+                                      std::vector<double>& denominator) {
+            // Implement using the same approach as Butterworth, but with Chebyshev prototype poles
+            
+            // Convert ripple from dB to epsilon
+            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
+            
+            // Calculate alpha value
+            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
+            double sinh_alpha = sinh(alpha);
+            double cosh_alpha = cosh(alpha);
+            
+            // Generate Chebyshev poles
+            std::vector<std::complex<double>> protoPoles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sinh_alpha * sin(theta);
+                double im = cosh_alpha * cos(theta);
+                protoPoles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Calculate center frequency and bandwidth
+            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
+            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
+            
+            // Apply bandpass transformation to each pole
+            std::vector<std::complex<double>> bpPoles;
+            std::vector<std::complex<double>> bpZeros;
+            
+            for (const auto& p : protoPoles) {
+                std::complex<double> scaled_p = p * bandwidth / 2.0;
+                std::complex<double> discriminant = scaled_p * scaled_p - omega0 * omega0;
+                std::complex<double> sqrt_disc = std::sqrt(discriminant);
+                
+                bpPoles.push_back(scaled_p + sqrt_disc);
+                bpPoles.push_back(scaled_p - sqrt_disc);
+                
+                // Each BP filter also has zeros at s=0 (DC)
+                bpZeros.push_back(std::complex<double>(0.0, 0.0));
+            }
+            
+            // Convert to digital domain using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : bpPoles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            std::vector<std::complex<double>> digitalZeros;
+            for (const auto& z : bpZeros) {
+                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
+                digitalZeros.push_back(digitalZero);
+            }
+            
+            // Add zeros at z=-1 (Nyquist) to match order
+            for (int i = 0; i < order; i++) {
+                digitalZeros.push_back(std::complex<double>(-1.0, 0.0));
+            }
+            
+            // Convert to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
+            
+            // Adjust gain at center frequency
+            double H0 = 1.0;
+            if (order % 2 == 0) {  // even order
+                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
+            }
+            
+            // Evaluate at center frequency
+            double centerFreq = (cutoffLow + cutoffHigh) / 2.0;
+            double omega = 2.0 * M_PI * centerFreq;
+            std::complex<double> response = evaluateFilter(numerator, denominator, omega);
+            double magnitude = std::abs(response);
+            
+            if (magnitude > 1e-10) {
+                double gain = H0 / magnitude;
+                for (double& n : numerator) {
+                    n *= gain;
+                }
+            }
+        }
+        
+        void generateChebyshevBandStop(double cutoffLow, double cutoffHigh, int order, double ripple,
+                                      std::vector<double>& numerator, 
+                                      std::vector<double>& denominator) {
+            // Implement using the same approach as Butterworth, but with Chebyshev prototype poles
+            
+            // Convert ripple from dB to epsilon
+            double epsilon = std::sqrt(std::pow(10.0, ripple / 10.0) - 1.0);
+            
+            // Calculate alpha value
+            double alpha = (1.0 / order) * asinh(1.0 / epsilon);
+            double sinh_alpha = sinh(alpha);
+            double cosh_alpha = cosh(alpha);
+            
+            // Generate Chebyshev poles
+            std::vector<std::complex<double>> protoPoles;
+            double poleAngleIncrement = M_PI / order;
+            
+            for (int i = 0; i < order; i++) {
+                double theta = (2.0 * i + 1) * poleAngleIncrement / 2.0;
+                double re = -sinh_alpha * sin(theta);
+                double im = cosh_alpha * cos(theta);
+                protoPoles.push_back(std::complex<double>(re, im));
+            }
+            
+            // Calculate center frequency and bandwidth
+            double omega0 = 2.0 * M_PI * sqrt(cutoffLow * cutoffHigh);
+            double bandwidth = 2.0 * M_PI * (cutoffHigh - cutoffLow);
+            
+            // Apply bandstop transformation to each pole
+            std::vector<std::complex<double>> bsPoles;
+            std::vector<std::complex<double>> bsZeros;
+            
+            for (const auto& p : protoPoles) {
+                std::complex<double> inv_p = bandwidth / (2.0 * p);
+                std::complex<double> discriminant = (inv_p * inv_p) - (omega0 * omega0);
+                std::complex<double> sqrt_disc = std::sqrt(discriminant);
+                
+                bsPoles.push_back(inv_p + sqrt_disc);
+                bsPoles.push_back(inv_p - sqrt_disc);
+                
+                // Each BS filter has zeros on imaginary axis at +/- j*omega0
+                bsZeros.push_back(std::complex<double>(0.0, omega0));
+                bsZeros.push_back(std::complex<double>(0.0, -omega0));
+            }
+            
+            // Convert to digital domain using bilinear transform
+            std::vector<std::complex<double>> digitalPoles;
+            for (const auto& p : bsPoles) {
+                std::complex<double> digitalPole = (1.0 + p) / (1.0 - p);
+                digitalPoles.push_back(digitalPole);
+            }
+            
+            std::vector<std::complex<double>> digitalZeros;
+            for (const auto& z : bsZeros) {
+                std::complex<double> digitalZero = (1.0 + z) / (1.0 - z);
+                digitalZeros.push_back(digitalZero);
+            }
+            
+            // Convert to transfer function coefficients
+            polesZerosToTransferFunction(digitalPoles, digitalZeros, numerator, denominator);
+            
+            // Adjust gain for proper ripple
+            double H0 = 1.0;
+            if (order % 2 == 0) {  // even order
+                H0 = 1.0 / sqrt(1.0 + epsilon * epsilon);
+            }
+            
+            // Normalize gain at DC
+            double dcGain = evaluatePolyomial(numerator, 1.0) / evaluatePolyomial(denominator, 1.0);
+            for (double& n : numerator) {
+                n *= H0 / dcGain;
+            }
+        }
+        
+        // Polynomial evaluation at z
+        double evaluatePolyomial(const std::vector<double>& coeffs, double z) {
+            double result = 0.0;
+            double z_power = 1.0;
+            
+            for (double c : coeffs) {
+                result += c * z_power;
+                z_power *= z;
+            }
+            
+            return result;
+        }
+        
+        // Convert poles and zeros to transfer function coefficients
+        void polesZerosToTransferFunction(const std::vector<std::complex<double>>& poles,
+                                         const std::vector<std::complex<double>>& zeros,
+                                         std::vector<double>& numerator,
+                                         std::vector<double>& denominator) {
+            // Start with constant term
+            numerator = {1.0};
+            denominator = {1.0};
+            
+            // Create working copies of poles and zeros that we can modify
+            std::vector<std::complex<double>> workingZeros = zeros;
+            std::vector<bool> processedZeros(workingZeros.size(), false);
+            
+            // Process zeros
+            for (size_t index = 0; index < workingZeros.size(); index++) {
+                // Skip if this zero has been processed already
+                if (processedZeros[index]) {
+                    continue;
+                }
+                
+                const auto& zero = workingZeros[index];
+                // Multiply numerator by (z - zero)
+                std::vector<double> term;
+                
+                if (std::abs(zero.imag()) < 1e-10) {
+                    // Real zero: (z - a)
+                    term = {-zero.real(), 1.0};
+                    convolvePoly(numerator, term);
+                    processedZeros[index] = true;
+                } else {
+                    // For complex zeros, add conjugate pair: (z - a)(z - a*)
+                    // This expands to z^2 - 2*Re(a)*z + |a|^2
+                    double re = zero.real();
+                    double norm = std::norm(zero);  // |zero|^2
+                    term = {norm, -2.0 * re, 1.0};
+                    convolvePoly(numerator, term);
+                    processedZeros[index] = true;
+                    
+                    // Find and mark conjugate zero as processed
+                    for (size_t i = index + 1; i < workingZeros.size(); i++) {
+                        if (std::abs(workingZeros[i].real() - zero.real()) < 1e-10 &&
+                            std::abs(workingZeros[i].imag() + zero.imag()) < 1e-10) {
+                            processedZeros[i] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Create working copies for poles
+            std::vector<std::complex<double>> workingPoles = poles;
+            std::vector<bool> processedPoles(workingPoles.size(), false);
+            
+            // Process poles
+            for (size_t index = 0; index < workingPoles.size(); index++) {
+                // Skip if this pole has been processed already
+                if (processedPoles[index]) {
+                    continue;
+                }
+                
+                const auto& pole = workingPoles[index];
+                // Multiply denominator by (z - pole)
+                std::vector<double> term;
+                
+                if (std::abs(pole.imag()) < 1e-10) {
+                    // Real pole: (z - a)
+                    term = {-pole.real(), 1.0};
+                    convolvePoly(denominator, term);
+                    processedPoles[index] = true;
+                } else {
+                    // For complex poles, add conjugate pair: (z - a)(z - a*)
+                    // This expands to z^2 - 2*Re(a)*z + |a|^2
+                    double re = pole.real();
+                    double norm = std::norm(pole);  // |pole|^2
+                    term = {norm, -2.0 * re, 1.0};
+                    convolvePoly(denominator, term);
+                    processedPoles[index] = true;
+                    
+                    // Find and mark conjugate pole as processed
+                    for (size_t i = index + 1; i < workingPoles.size(); i++) {
+                        if (std::abs(workingPoles[i].real() - pole.real()) < 1e-10 &&
+                            std::abs(workingPoles[i].imag() + pole.imag()) < 1e-10) {
+                            processedPoles[i] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Clean up small coefficients that might be numerical artifacts
+            for (double& c : numerator) {
+                if (std::abs(c) < 1e-12) c = 0.0;
+            }
+            
+            for (double& c : denominator) {
+                if (std::abs(c) < 1e-12) c = 0.0;
+            }
+        }
+        
+        // Convolve two polynomials
+        void convolvePoly(std::vector<double>& poly, const std::vector<double>& term) {
+            std::vector<double> result(poly.size() + term.size() - 1, 0.0);
+            
+            for (size_t i = 0; i < poly.size(); i++) {
+                for (size_t j = 0; j < term.size(); j++) {
+                    result[i + j] += poly[i] * term[j];
+                }
+            }
+            
+            poly = result;
         }
     };
     
