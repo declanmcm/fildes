@@ -74,7 +74,7 @@ class RBJFilterGenerator {
             }
             
             // Convert gain from dB to linear
-            double A = pow(10.0, gainDB / 40.0); // Convert gainDB to linear amplitude
+            double A = pow(10.0, gainDB / 40.0);
             
             // Initialize coefficients
             double b0 = 0.0, b1 = 0.0, b2 = 0.0;
@@ -229,6 +229,10 @@ class CustomButton : public CairoSubWidget,
         uint32_t getId() const noexcept
         {
             return fId;
+        }
+
+        void setLabel(std::string newLabel) {
+            fLabel = newLabel;
         }
     
     protected:
@@ -1113,9 +1117,7 @@ class FildesUI : public UI,
      DGL::Rectangle<int> fPoleZeroArea;
      
      // Dragging state
-     bool fIsDragging;
-     bool fDraggingPole;  // true for pole, false for zero
-     bool fGeneratorTracking;
+     bool fIsDragging, fDraggingPole, fGeneratorTracking, fUpdatedFromTF, fUpdatedFromPZP, fUpdatedFromFG, fFilterUnstable;
      double fDragStartX, fDragStartY;
  
      int fDraggedIndex;
@@ -1168,8 +1170,8 @@ class FildesUI : public UI,
          fCoeffT->setCallback(this);
  
          fCoeffB = new EditableText(this, "B");
-         fCoeffB->setAbsolutePos(150, 100);
-         fCoeffB->setSize(500, 30);
+         fCoeffB->setAbsolutePos(170, 100);
+         fCoeffB->setSize(480, 30);
          fCoeffB->setCallback(this);
 
          // Create gain input field
@@ -1181,12 +1183,14 @@ class FildesUI : public UI,
          
          // Set up the response and pole-zero areas
          fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
-         fPoleZeroArea = DGL::Rectangle<int>(500, 370, 250, 250);
+         fPoleZeroArea = DGL::Rectangle<int>(500, 385, 250, 250);
          
          // Initialize dragging state
          fIsDragging = false;
          fDraggingPole = false;
          fDraggedIndex = -1;
+
+         fUpdatedFromPZP = fUpdatedFromTF = fUpdatedFromFG = fFilterUnstable = false;
  
          // Increase window size to accommodate both visualizations
          const double scaleFactor = getScaleFactor();
@@ -1213,21 +1217,21 @@ class FildesUI : public UI,
         fFrequencyInput->setAbsolutePos(150, 470);
         fFrequencyInput->setSize(150, 30);
         fFrequencyInput->setCallback(this);
-        fFrequencyInput->setText("1000");  // Default value
+        fFrequencyInput->setText("1000");
 
         // Create Q input
         fQInput = new EditableText(this, " ");
         fQInput->setAbsolutePos(150, 520);
         fQInput->setSize(150, 30);
         fQInput->setCallback(this);
-        fQInput->setText("0.7071");  // Default Butterworth Q
+        fQInput->setText("0.7071");
 
         // Create gain dB input (for peak and shelf filters)
         fGainDBInput = new EditableText(this, " ");
-        fGainDBInput->setAbsolutePos(150, 570);
+        fGainDBInput->setAbsolutePos(150, 520);
         fGainDBInput->setSize(150, 30);
         fGainDBInput->setCallback(this);
-        fGainDBInput->setText("0.0");  // Default value
+        fGainDBInput->setText("0.0");
         fGainDBInput->setVisible(false);
 
         // Create bandwidth input (alternative to Q for some filters)
@@ -1235,12 +1239,12 @@ class FildesUI : public UI,
         fBandwidthInput->setAbsolutePos(320, 520);
         fBandwidthInput->setSize(150, 30);
         fBandwidthInput->setCallback(this);
-        fBandwidthInput->setText("1.0");  // Default value (in octaves)
+        fBandwidthInput->setText("1.0");
         fBandwidthInput->setVisible(false);
 
         // Create generate button
-        fGenerateButton = new CustomButton(this, "Toggle Tracking");
-        fGenerateButton->setAbsolutePos(150, 620);
+        fGenerateButton = new CustomButton(this, "Start Tracking");
+        fGenerateButton->setAbsolutePos(150, 570);
         fGenerateButton->setSize(150, 40);
         fGenerateButton->setCallback(this);
 
@@ -1263,11 +1267,13 @@ class FildesUI : public UI,
     {
         // Draw filter generator section title
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-        if (fGeneratorTracking) cairo_set_source_rgb(cr, 0.0, 0.0, 0.5);
+        if (fUpdatedFromFG) cairo_set_source_rgb(cr, 0.0, 0.5, 0.0);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
         cairo_set_font_size(cr, 20);
         cairo_move_to(cr, 10, 400);
-        cairo_show_text(cr, "Filter Generator");
+        cairo_show_text(cr, "Bi-Quad Filter Generator");
+
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         
         // Draw filter parameter labels
         cairo_set_font_size(cr, 16);
@@ -1279,8 +1285,10 @@ class FildesUI : public UI,
         cairo_move_to(cr, 10, 490);
         cairo_show_text(cr, "Frequency (Hz):");
         
-        cairo_move_to(cr, 10, 540);
-        cairo_show_text(cr, "Q:");
+        if (fQInput->isVisible()) {
+            cairo_move_to(cr, 10, 540);
+            cairo_show_text(cr, "Q:");
+        }
         
         // Show bandwidth label if applicable
         if (fBandwidthInput->isVisible()) {
@@ -1300,22 +1308,37 @@ class FildesUI : public UI,
          cairo_t* const cr = context.handle;
          cairo_set_source_rgb(cr, 0.541, 0.576, 1);
          cairo_paint(cr);
+
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 14);
+
+        cairo_move_to(cr, 155, 120);
+        cairo_show_text(cr, "1,");
+
+        cairo_move_to(cr, 670, 80);
+        cairo_show_text(cr, "Apply Gain (dB):");
  
-         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0); // Set text color
-         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-         cairo_set_font_size(cr, 20);
- 
-         cairo_move_to(cr, 10, 30);
+        cairo_move_to(cr, 10, 30);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
         cairo_set_font_size(cr, 20);
+        if (fUpdatedFromTF) cairo_set_source_rgb(cr, 0.0, 0.5, 0.0);
         cairo_show_text(cr, "Transfer Function");
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          
-         cairo_move_to(cr, 10, 75);
+         cairo_move_to(cr, 10, 70);
          cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
          cairo_show_text(cr, "Numerator:");
          
-         cairo_move_to(cr, 10, 125);
+         cairo_move_to(cr, 10, 120);
          cairo_show_text(cr, "Denominator:");
+
+         if (fFilterUnstable) {
+            cairo_move_to(cr, 350, 30);
+            cairo_set_font_size(cr, 16);
+            cairo_set_source_rgb(cr, 0.8, 0.0, 0.0);
+            cairo_show_text(cr, "Filter unstable");
+         }
  
          drawFrequencyResponse(cr);
  
@@ -1358,7 +1381,8 @@ class FildesUI : public UI,
          const double maxDb = 20.0;
          
          // Draw the magnitude response
-         cairo_set_source_rgb(cr, 0.0, 0.0, 0.8); // Blue for magnitude
+         cairo_set_source_rgb(cr, 0.0, 0.0, 0.8);
+         if (fFilterUnstable) cairo_set_source_rgb(cr, 0.8, 0.0, 0.0);
          cairo_set_line_width(cr, 2.0);
          
          cairo_new_path(cr);
@@ -1424,14 +1448,26 @@ class FildesUI : public UI,
          // Draw poles (x)
          cairo_set_source_rgb(cr, 0.8, 0.0, 0.0); // Red for poles
          const std::vector<std::complex<double>>& poles = fVisualizer.getPoles();
-         
+        
          for (const auto& pole : poles) {
              // Map complex coordinate to plot coordinate
              const double plotX = centerX + pole.real() * radius;
              const double plotY = centerY - pole.imag() * radius;
+             const double crossSize = 6.0;
+
+             if (500 + crossSize >= plotX || plotX >= 750 - crossSize || 385 + crossSize >= plotY || plotY >= 635 - crossSize) {
+                // Would fall outside of plot, do not plot
+                std::cout << "Pole pos:" << plotX << ", " << plotY << std::endl;
+                double posx = std::max(500 + crossSize, std::min(750 - crossSize, plotX));
+                double posy = std::max(385 + crossSize, std::min(635 - crossSize, plotY));
+                std::cout << "New pos:" << posx << ", " << posy << std::endl;
+                cairo_set_line_width(cr, 2.0);
+                cairo_arc(cr, posx, posy, 1.0, 0, 2 * M_PI);
+                cairo_stroke(cr);
+                continue;
+             }
              
              // Draw X
-             const double crossSize = 6.0;
              cairo_set_line_width(cr, 2.0);
              cairo_move_to(cr, plotX - crossSize, plotY - crossSize);
              cairo_line_to(cr, plotX + crossSize, plotY + crossSize);
@@ -1448,20 +1484,34 @@ class FildesUI : public UI,
              // Map complex coordinate to plot coordinate
              const double plotX = centerX + zero.real() * radius;
              const double plotY = centerY - zero.imag() * radius;
+             const double circleSize = 6.0;
+
+             if (500 + circleSize > plotX || plotX > 750 - circleSize || 385 + circleSize > plotY || plotY > 635 - circleSize) {
+                // Would fall outside of plot, do not plot
+                std::cout << "Zero pos:" << plotX << ", " << plotY << std::endl;
+                double posx = std::max(500 + circleSize, std::min(750 - circleSize, plotX));
+                double posy = std::max(385 + circleSize, std::min(635 - circleSize, plotY));
+                std::cout << "New pos:" << posx << ", " << posy << std::endl;
+                cairo_set_line_width(cr, 2.0);
+                cairo_arc(cr, posx, posy, 1.0, 0, 2 * M_PI);
+                cairo_stroke(cr);
+                continue;
+             }
              
              // Draw O
-             const double circleSize = 6.0;
              cairo_set_line_width(cr, 2.0);
              cairo_arc(cr, plotX, plotY, circleSize, 0, 2 * M_PI);
              cairo_stroke(cr);
          }
          
          // Draw title
-         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+         if (fUpdatedFromPZP) cairo_set_source_rgb(cr, 0.0, 0.5, 0.0);
+         else cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
          cairo_set_font_size(cr, 14);
          cairo_move_to(cr, x + 10, y + 20);
          cairo_show_text(cr, "Pole-Zero Plot");
+         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          
          // Draw drag instruction
          cairo_set_font_size(cr, 10);
@@ -1659,15 +1709,6 @@ class FildesUI : public UI,
          return result;
      }
  
-     void updateTransferFunction() {
-         // Update the visualizer with current coefficients
-         fVisualizer.setNumerator(fNumerator);
-         fVisualizer.setDenominator(fDenominator);
-         
-         // Force a repaint to update the graph
-         repaint();
-     }
- 
      void updateVisualizationFromCoefficients() {
          // Ensure the visualizer has the latest coefficients
          fVisualizer.setNumerator(fNumerator);
@@ -1676,6 +1717,8 @@ class FildesUI : public UI,
          // Make sure poles and zeros are calculated
          fVisualizer.findPoles();
          fVisualizer.findZeros();
+
+         checkStability();
          
          // Force a repaint
          repaint();
@@ -1750,6 +1793,15 @@ class FildesUI : public UI,
          
          return std::complex<double>(real, imag);
      }
+
+     void checkStability() {
+        const std::vector<std::complex<double>>& poles = fVisualizer.getPoles();
+
+        fFilterUnstable = false;
+        for (const auto& pole : poles)
+            if (sqrt(pow(pole.real(), 2) + pow(pole.imag(), 2)) >= 1)
+                fFilterUnstable = true;
+     }
      
      // Update poles and zeros from dragging
      void updateCoefficientsFromDrag(int x, int y) {
@@ -1791,6 +1843,8 @@ class FildesUI : public UI,
              // Force text update for denominator
              fCoeffB->setText(denStr);
          }
+
+         checkStability();
          
          // Force repaint to ensure UI updates
          repaint();
@@ -1857,11 +1911,14 @@ class FildesUI : public UI,
          
          return UI::onMouse(ev);
      }
-     
+    
      bool onMotion(const MotionEvent& ev) override {
          if (fIsDragging && fDraggedIndex >= 0) {
              // Handle dragging
              updateCoefficientsFromDrag(ev.pos.getX(), ev.pos.getY());
+             fUpdatedFromPZP = true;
+             fUpdatedFromTF = false;
+             fUpdatedFromFG = false;
              return true;
          }
          
@@ -1919,17 +1976,19 @@ class FildesUI : public UI,
      }
  
      void setTF(std::string newText) override {
+        fUpdatedFromTF = true;
+        fUpdatedFromPZP = fUpdatedFromFG = false;
          std::cout << "setTF\n" << std::flush;
          if (newText[0] == 'T') {
              const char* coeffStr = &newText[1];
              parseCoefficients(coeffStr, fNumerator, false);
-             updateTransferFunction();
+             updateVisualizationFromCoefficients();
              setState("topTF", &newText[1]);
          }
          else if (newText[0] == 'B') {
              const char* coeffStr = &newText[1];
              parseCoefficients(coeffStr, fDenominator, true);
-             updateTransferFunction();
+             updateVisualizationFromCoefficients();
              setState("bottomTF", &newText[1]);
          }
      }
@@ -1938,8 +1997,17 @@ class FildesUI : public UI,
      void buttonClicked(CustomButton* button)
     {
         if (button == fGenerateButton.get()) {
-            generateFilter();
-            fGeneratorTracking = true;
+            if (fGeneratorTracking) {
+                fGeneratorTracking = false;
+                fGenerateButton->setLabel("Start Tracking");
+            } else {
+                fGeneratorTracking = true;
+                fUpdatedFromFG = true;
+                fGenerateButton->setLabel("Stop Tracking");
+                fUpdatedFromPZP = fUpdatedFromTF = false;
+                generateFilter();
+            }
+            repaint();
         }
     }
     
@@ -1949,7 +2017,11 @@ class FildesUI : public UI,
         if (dropdown == fFilterTypeDropdown.get()) {
             // Update parameter visibility based on filter type
             updateFilterParametersVisibility();
-            generateFilter();
+            if (fGeneratorTracking) {
+                generateFilter();
+                fUpdatedFromPZP = fUpdatedFromTF = false;
+                fUpdatedFromFG = true;
+            }
             repaint();
         }
     }
@@ -1961,22 +2033,18 @@ class FildesUI : public UI,
         
         try {
             gain = std::stod(gainStr);
-            
-            // Validate gain (prevent zero/negative values)
-            if (gain <= 0.0) {
-                std::cout << "Invalid gain value: " << gain << std::endl;
-                fGainInput->setText(""); // Reset to default gain
-                return;
-            }
         } catch (const std::exception& e) {
             std::cout << "Error parsing gain: " << e.what() << std::endl;
             fGainInput->setText(""); // Reset to default gain
             return;
         }
+
+        std::cout << "Gain:" << gain << std::endl;
         
+        double absGain = pow(10.0, gain / 20.0);
         // Apply the gain by multiplying all numerator coefficients
         for (double& coeff : fNumerator) {
-            coeff *= gain;
+            coeff *= absGain;
         }
         
         // Update the visualizer with modified coefficients
@@ -2031,7 +2099,6 @@ class FildesUI : public UI,
     {
         // All filter types use frequency and Q
         fFrequencyInput->setVisible(true);
-        fQInput->setVisible(true);
         
         // Only certain filter types use gain
         RBJFilterGenerator::FilterType filterType = 
@@ -2043,16 +2110,20 @@ class FildesUI : public UI,
             case RBJFilterGenerator::HIGH_SHELF:
                 fGainDBInput->setVisible(true);
                 fBandwidthInput->setVisible(true);
+                fQInput->setVisible(false);
                 break;
                 
             default:
                 fGainDBInput->setVisible(false);
                 fBandwidthInput->setVisible(false);
+                fQInput->setVisible(true);
                 break;
         }
     }
 
     void generateIfTracking() override {
+        fUpdatedFromPZP = fUpdatedFromTF = false;
+        fUpdatedFromFG = true;
         if (fGeneratorTracking)
             generateFilter();
     }

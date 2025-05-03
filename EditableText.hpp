@@ -210,15 +210,15 @@ protected:
         if (this->isFocused() && ev.press)
         {
             if (fType == "G") {
-                if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1])) {
+                if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1])) {
                     if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
+                    if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
                     fText += ev.key;
                     repaint();
                 }
                 else if (ev.key == 8 && !fText.empty()) // Handle backspace
                 {
                     if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
-                    if (fText[fText.length() - 1] == ',') fCoeffCount--;
                     if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
                     fText.pop_back();
                     repaint();
@@ -229,6 +229,7 @@ protected:
                     fCallback->setGain(fText);
                     fText = "";
                     fPoint[fCoeffCount - 1] = false;
+                    fMinus[fCoeffCount - 1] = false;
                     repaint();
                 }
             } else {
@@ -236,7 +237,6 @@ protected:
                 {
                     if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
                     if (ev.key == ',') {
-                        fPoint[++fCoeffCount - 1] = false;
                         fMinus[++fCoeffCount - 1] = false;
                     }
                     if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
