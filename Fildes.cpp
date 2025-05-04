@@ -20,6 +20,7 @@
 #include <string.h>
 #include <iostream>
 #include <cstdio>
+#include <bitset>
 
 START_NAMESPACE_DISTRHO
 
@@ -161,10 +162,16 @@ class Fildes : public Plugin
 {
     double topTF[100];
     double bottomTF[100];
+    double fNewTop[100];
+    double fNewBottom[100];
+    double fOldTop[100];
+    double fOldBottom[100];
     double outMem[100];
 	double inMem[100];
 	double gain;
-    int numCoeffsTop, numCoeffsBottom, outi, ini, xz1, xz2, yz1, yz2;
+    double alpha;
+    int numCoeffsTop, numCoeffsBottom, outi, ini, xz1, xz2, yz1, yz2, fRuni, fPrevChangei, fInterpolIter, fMaxValCount;
+    bool fTFChanged;
 
 public:
     Fildes()
@@ -172,11 +179,21 @@ public:
     {
         std::memset(topTF, 0, sizeof(topTF));
         std::memset(bottomTF, 0, sizeof(bottomTF));
+        std::memset(fNewTop, 0, sizeof(fNewTop));
+        std::memset(fNewBottom, 0, sizeof(fNewBottom));
+        std::memset(fOldTop, 0, sizeof(fOldTop));
+        std::memset(fOldBottom, 0, sizeof(fOldBottom));
         bottomTF[0] = 1;
+        fNewBottom[0] = 1;
         std::memset(outMem, 0, sizeof(outMem));
         std::memset(inMem, 0, sizeof(inMem));
-        numCoeffsTop = numCoeffsBottom = ini = outi = xz1 = xz2 = yz1 = yz2 = 0;
+        numCoeffsTop = numCoeffsBottom = ini = outi = fMaxValCount = xz1 = xz2 = yz1 = yz2 = 0;
 		std::cout << "Fildes\n" << std::flush;
+        fTFChanged = false;
+
+        fRuni = 0;
+        fPrevChangei = 0;
+        alpha = 0.01;
 
 		//std::memcpy(topTF, acoeff, sizeof(acoeff));
 		gain = 1;
@@ -300,10 +317,18 @@ public:
             outputArray[index] = 0.0f;
         }
 
+        // for (int i = 0; i < 100; i++) {
+        //     fOldTop[i] = topTF[i];
+        //     fOldBottom[i] = bottomTF[i];
+        // }
+
         for (int i = 0; i < 4; i++) {
             std::cout << topTF[i] << "\n" << std::flush;
             std::cout << bottomTF[i] << "\n" << std::flush;
         }
+
+        fPrevChangei = fRuni;
+        fTFChanged = true;
     }
 
     void setState(const char* key, const char* value) override {
@@ -339,9 +364,26 @@ public:
 
         int found = 0;
         double outputCopy[frames];
+        // fRuni++;
+        // if (fRuni > 99999) {
+        //     fPrevChangei -= fRuni;
+        //     fRuni = 0;
+        // }
 
         for (int i = 0; i < frames; i++) {
             double res = 0;
+
+            // if (fTFChanged) {
+            //     for (int j = 0; j < 100; j++) {
+            //         topTF[j] = fOldTop[j] * (1 - alpha * fInterpolIter) + fNewTop[j] * alpha * fInterpolIter;
+            //         bottomTF[j] = fOldBottom[j] * (1 - alpha * fInterpolIter) + fNewBottom[j] * alpha * fInterpolIter;
+            //     }
+            //     fInterpolIter++;
+            //     if (fInterpolIter >= (1 / alpha)) {
+            //         std::cout << "Done" << std::endl;
+            //         fTFChanged = false;
+            //     }
+            // }
             
             if (i > 98) {
                 for (int j = 0; j < 100; j++) {
@@ -365,8 +407,21 @@ public:
                 }
             }
 
-            outputs[0][i] = res * gain;
-            outputCopy[i] = res * gain;
+            outputs[0][i] = static_cast<float>(res);
+            outputCopy[i] = res;
+
+            uint32_t bits;
+            std::memcpy(&bits, &outputs[0][i], sizeof(bits));
+
+            if (bits == 0xFFC00000) {
+                std::cout << "TOO LOUD" << std::endl;
+                fMaxValCount++;
+                if (fMaxValCount > 100) {
+                    fMaxValCount = 0;
+                    std::memset(inMem, 0, sizeof(inMem));
+                    std::memset(outMem, 0, sizeof(outMem));
+                }
+            }
         }
     }
 

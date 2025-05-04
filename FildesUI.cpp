@@ -658,12 +658,16 @@ class TransferFunctionVisualizer {
          mNeedsUpdate = true;
      }
  
-     void calculateResponse() {
+     double calculateResponse(double maxA) {
          if (!mNeedsUpdate) {
-             return;
+             return 0.0;
          }
          
          const size_t numFreqs = mFrequencies.size();
+         double scaleFactor = 0.0;
+
+
+         std::cout << "MaxA: " << maxA << std::endl;
          
          for (size_t i = 0; i < numFreqs; ++i) {
              double frequency = mFrequencies[i];
@@ -688,13 +692,23 @@ class TransferFunctionVisualizer {
              
              // Calculate transfer function
              std::complex<double> response = numerator / denominator;
+
+             double absMagnitude = std::abs(response);
+
+             if ((absMagnitude > maxA) && (absMagnitude > scaleFactor))
+                scaleFactor = absMagnitude;
              
              // Calculate magnitude in dB and phase
-             mMagnitudes[i] = 20.0 * log10(std::abs(response) + 1e-6);
+             mMagnitudes[i] = 20.0 * log10(absMagnitude + 1e-6);
              mPhases[i] = std::arg(response);
          }
+
+         std::cout << "Scale factor: " << scaleFactor << std::endl;
          
          mNeedsUpdate = false;
+        if (scaleFactor != 0)
+            return maxA / scaleFactor;
+        else return scaleFactor;
      }
  
      // Find roots of a polynomial using companion matrix method
@@ -1084,8 +1098,6 @@ class FildesUI : public UI,
                         public CustomButton::Callback,
                         public Dropdown::Callback
  {
-     ScopedPointer<CairoImageKnob> fKnob;
-     ScopedPointer<CairoImageSwitch> fButton;
      ScopedPointer<DemoWidgetClickable> fWidgetClickable;
      ScopedPointer<EditableText> fCoeffT, fCoeffB;
      ScopedPointer<DGL::SubWidget> fContainer;
@@ -1096,10 +1108,11 @@ class FildesUI : public UI,
      ScopedPointer<EditableText> fQInput;
      ScopedPointer<EditableText> fGainDBInput;
      ScopedPointer<EditableText> fBandwidthInput;
+     ScopedPointer<EditableText> fMaxAInput;
      ScopedPointer<CustomButton> fGenerateButton;
 
 
-    ScopedPointer<EditableText> *fTextInputs[7];
+    ScopedPointer<EditableText> *fTextInputs[8];
  
      // Add the visualizer
      TransferFunctionVisualizer fVisualizer;
@@ -1118,7 +1131,7 @@ class FildesUI : public UI,
      
      // Dragging state
      bool fIsDragging, fDraggingPole, fGeneratorTracking, fUpdatedFromTF, fUpdatedFromPZP, fUpdatedFromFG, fFilterUnstable;
-     double fDragStartX, fDragStartY;
+     double fDragStartX, fDragStartY, fMaxA;
  
      int fDraggedIndex;
  
@@ -1134,9 +1147,6 @@ class FildesUI : public UI,
          fVisualizer.setNumerator(fNumerator);
          fVisualizer.setDenominator(fDenominator);
          fGeneratorTracking = false;
-         
-         CairoImage knobSkin;
-         knobSkin.loadFromPNG(Artwork::knobData, Artwork::knobDataSize);
  
          fWidgetClickable = new DemoWidgetClickable(this);
          fWidgetClickable->setAbsolutePos(100, 100);
@@ -1144,24 +1154,6 @@ class FildesUI : public UI,
          fWidgetClickable->setCallback(this);
          fWidgetClickable->setId(kParameterTriState);
          fWidgetClickable->setVisible(false);
- 
-         fKnob = new CairoImageKnob(this, knobSkin);
-         fKnob->setAbsolutePos(10, 100);
-         fKnob->setSize(80, 80);
-         fKnob->setCallback(this);
-         fKnob->setId(kParameterKnob);
-         fKnob->setVisible(false);
- 
-         CairoImage buttonOn, buttonOff;
-         buttonOn.loadFromPNG(Artwork::buttonOnData, Artwork::buttonOnDataSize);
-         buttonOff.loadFromPNG(Artwork::buttonOffData, Artwork::buttonOffDataSize);
- 
-         fButton = new CairoImageSwitch(this, buttonOff, buttonOn);
-         fButton->setAbsolutePos(100, 160);
-         fButton->setSize(60, 35);
-         fButton->setCallback(this);
-         fButton->setId(kParameterButton);
-         fButton->setVisible(false);
  
          // Initialize in constructor
          fCoeffT = new EditableText(this, "T");
@@ -1174,12 +1166,20 @@ class FildesUI : public UI,
          fCoeffB->setSize(480, 30);
          fCoeffB->setCallback(this);
 
+        fMaxAInput = new EditableText(this, "M");
+        fMaxAInput->setAbsolutePos(750, 50);
+        fMaxAInput->setSize(70, 30);
+        fMaxAInput->setCallback(this);
+        fMaxAInput->setText("");
+        fMaxA = 99999999;
+
          // Create gain input field
         fGainInput = new EditableText(this, "G");
-        fGainInput->setAbsolutePos(670, 100);
+        fGainInput->setAbsolutePos(750, 100);
         fGainInput->setSize(70, 30);
         fGainInput->setCallback(this);
         fGainInput->setText("");
+
          
          // Set up the response and pole-zero areas
          fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
@@ -1192,9 +1192,8 @@ class FildesUI : public UI,
 
          fUpdatedFromPZP = fUpdatedFromTF = fUpdatedFromFG = fFilterUnstable = false;
  
-         // Increase window size to accommodate both visualizations
          const double scaleFactor = getScaleFactor();
-         setSize(800, 650);
+         setSize(1000, 650);
          if (scaleFactor != 1.0)
              setSize(800 * scaleFactor, 650 * scaleFactor);
 
@@ -1256,6 +1255,7 @@ class FildesUI : public UI,
         fTextInputs[0] = &fCoeffT;
         fTextInputs[1] = &fCoeffB;
         fTextInputs[2] = &fGainInput;
+        fTextInputs[7] = &fMaxAInput;
 
         // Initialize visibility based on current filter type
         updateFilterParametersVisibility();
@@ -1316,8 +1316,11 @@ class FildesUI : public UI,
         cairo_move_to(cr, 155, 120);
         cairo_show_text(cr, "1,");
 
-        cairo_move_to(cr, 670, 80);
-        cairo_show_text(cr, "Apply Gain (dB):");
+        cairo_move_to(cr, 660, 120);
+        cairo_show_text(cr, "Apply gain:");
+
+        cairo_move_to(cr, 660, 70);
+        cairo_show_text(cr, "Gain limit:");
  
         cairo_move_to(cr, 10, 30);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
@@ -1349,7 +1352,23 @@ class FildesUI : public UI,
      void drawFrequencyResponse(cairo_t* cr)
      {
          // Calculate the response if needed
-         fVisualizer.calculateResponse();
+         double factor = fVisualizer.calculateResponse(fMaxA);
+         if (factor != 0.0) {
+            std::vector<double> num = fVisualizer.getNumerator();
+            std::vector<double> newNum;
+
+            for (const auto& coeff : num)
+                newNum.push_back(coeff * factor);
+
+            fNumerator = newNum;
+            fVisualizer.setNumerator(fNumerator);
+            fVisualizer.calculateResponse(fMaxA);
+
+            std::string numStr = formatCoefficients(fNumerator, false);
+            fCoeffT->setText(numStr);
+            
+            setState("topTF", numStr.c_str());
+         }
          
          // Prepare the plot area
          const int x = fResponseArea.getX();
@@ -1934,12 +1953,6 @@ class FildesUI : public UI,
  
          fWidgetClickable->setSize(50*scaleFactor, 50*scaleFactor);
          fWidgetClickable->setAbsolutePos(100*scaleFactor, 100*scaleFactor);
- 
-         fKnob->setSize(80*scaleFactor, 80*scaleFactor);
-         fKnob->setAbsolutePos(10*scaleFactor, 100*scaleFactor);
- 
-         fButton->setSize(60*scaleFactor, 35*scaleFactor);
-         fButton->setAbsolutePos(100*scaleFactor, 160*scaleFactor);
      
          // Update the response area
          fResponseArea = DGL::Rectangle<int>(
@@ -1954,20 +1967,14 @@ class FildesUI : public UI,
      {
          switch (index)
          {
-         case kParameterKnob:
-             fKnob->setValue(value);
-             break;
          case kParameterTriState:
              fWidgetClickable->setColorId(static_cast<int>(value + 0.5f));
-             break;
-         case kParameterButton:
-             fButton->setDown(value > 0.5f);
              break;
          }
      }
      
      void focus(EditableText* current) override {
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 8; i++) {
             if (*(fTextInputs[i]) != nullptr) {
                 (*(fTextInputs[i]))->setFocused(*(fTextInputs[i]) == current);
             }
@@ -2024,6 +2031,21 @@ class FildesUI : public UI,
             }
             repaint();
         }
+    }
+
+    void setMaxA(std::string maxAStr) override {
+        double maxA = 1.0;
+
+        try {
+            maxA = std::stod(maxAStr);
+        } catch (const std::exception& e) {
+            std::cout << "Error parsing max amplitude: " << e.what() << std::endl;
+            return;
+        }
+
+        fMaxA = pow(10.0, maxA / 20.0);
+        std::cout << "fMaxA: " << fMaxA << std::endl;
+        updateVisualizationFromCoefficients();
     }
 
      void setGain(std::string gainStr) override

@@ -99,6 +99,7 @@ public:
         virtual void setTF(std::string newText) = 0;
         virtual void focus(EditableText* current) = 0;
         virtual void setGain(std::string gainStr) = 0;
+        virtual void setMaxA(std::string maxAStr) = 0;
         virtual void generateIfTracking(void) = 0;
     };
 
@@ -209,7 +210,7 @@ protected:
     {
         if (this->isFocused() && ev.press)
         {
-            if (fType == "G") {
+            if (fType == "G" || fType == "M") {
                 if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1])) {
                     if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
                     if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
@@ -223,14 +224,18 @@ protected:
                     fText.pop_back();
                     repaint();
                 }
-                else if (ev.key == 13) // Use enter key to apply gain
+                else if (ev.key == 13 && fType == "G") // Use enter key to apply gain
                 {
                     this->setFocused(false);
-                    fCallback->setGain(fText);
+                    if (fCallback)
+                        fCallback->setGain(fText);
                     fText = "";
                     fPoint[fCoeffCount - 1] = false;
                     fMinus[fCoeffCount - 1] = false;
                     repaint();
+                }
+                if (fType == "M" && fCallback) {
+                    fCallback->setMaxA(fText);
                 }
             } else {
                 if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1] && (!(std::strcmp(fText.c_str(), "")) || fText[fText.length() - 1] == ',')) || (ev.key == ',')) // Allow digits and decimal point
