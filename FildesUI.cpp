@@ -1485,10 +1485,10 @@ class FildesUI : public UI,
 
              if (500 + crossSize >= plotX || plotX >= 750 - crossSize || 385 + crossSize >= plotY || plotY >= 635 - crossSize) {
                 // Would fall outside of plot, do not plot
-                std::cout << "Pole pos:" << plotX << ", " << plotY << std::endl;
+                // std::cout << "Pole pos:" << plotX << ", " << plotY << std::endl;
                 double posx = std::max(500 + crossSize, std::min(750 - crossSize, plotX));
                 double posy = std::max(385 + crossSize, std::min(635 - crossSize, plotY));
-                std::cout << "New pos:" << posx << ", " << posy << std::endl;
+                // std::cout << "New pos:" << posx << ", " << posy << std::endl;
                 cairo_set_line_width(cr, 2.0);
                 cairo_arc(cr, posx, posy, 1.0, 0, 2 * M_PI);
                 cairo_stroke(cr);
@@ -1516,10 +1516,8 @@ class FildesUI : public UI,
 
              if (500 + circleSize > plotX || plotX > 750 - circleSize || 385 + circleSize > plotY || plotY > 635 - circleSize) {
                 // Would fall outside of plot, do not plot
-                std::cout << "Zero pos:" << plotX << ", " << plotY << std::endl;
                 double posx = std::max(500 + circleSize, std::min(750 - circleSize, plotX));
                 double posy = std::max(385 + circleSize, std::min(635 - circleSize, plotY));
-                std::cout << "New pos:" << posx << ", " << posy << std::endl;
                 cairo_set_line_width(cr, 2.0);
                 cairo_arc(cr, posx, posy, 1.0, 0, 2 * M_PI);
                 cairo_stroke(cr);
