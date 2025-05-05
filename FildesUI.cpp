@@ -26,6 +26,10 @@
  #include <complex>
  #include <vector>
  #include <cmath>
+ #include <thread>
+ #include <chrono>
+ #include <future>
+ #include <functional>
  #include "Eigen/Eigen"
 
  
@@ -1134,12 +1138,17 @@ class FildesUI : public UI,
      double fDragStartX, fDragStartY, fMaxA;
  
      int fDraggedIndex;
+
+     bool fCoeffToBeSent = false;
+     bool fSendScheduled = false;
  
  public:
      FildesUI()
      {
          freopen("output.txt","w",stdout);
          std::cout << "start\n" << std::flush;
+
+         freopen("nums.txt", "w", stderr);
          
          // Initialize with default filter coefficients
          parseCoefficients("0,0,0,1", fNumerator);
@@ -1821,6 +1830,13 @@ class FildesUI : public UI,
             if (sqrt(pow(pole.real(), 2) + pow(pole.imag(), 2)) >= 1)
                 fFilterUnstable = true;
      }
+
+     void scheduleFunction(std::function<void()> func, int delayMs) {
+        std::thread([func, delayMs]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            func();
+        }).detach();
+    }
      
      // Update poles and zeros from dragging
      void updateCoefficientsFromDrag(int x, int y) {
@@ -1867,10 +1883,26 @@ class FildesUI : public UI,
          
          // Force repaint to ensure UI updates
          repaint();
+
+         fCoeffToBeSent = true;
+
+         if (!fSendScheduled) {
+            fSendScheduled = true;
+            scheduleFunction([this]() {
+                fSendScheduled = false;
+                fCoeffToBeSent = false;
+
+                std::string numToSend = formatCoefficients(fNumerator, false);
+                std::string denToSend = formatCoefficients(fDenominator, true);
+
+                setState("topTF", numToSend.c_str());
+                setState("bottomTF", denToSend.c_str());
+            }, 30);
+        }
          
          // Update the plugin state
-         setState("topTF", numStr.c_str());
-         setState("bottomTF", denStr.c_str());
+        //  setState("topTF", numStr.c_str());
+        //  setState("bottomTF", denStr.c_str());
      }
  
      int findConjugateIndex(bool isPole, int index) {

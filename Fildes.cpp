@@ -282,11 +282,11 @@ public:
         double *outputArray;
         if (type) {
             numCoeffs = &numCoeffsTop;
-            outputArray = topTF;
+            outputArray = fNewTop;
         }
         else {
             numCoeffs = &numCoeffsBottom;
-            outputArray = &bottomTF[1];
+            outputArray = &fNewBottom[1];
         }
         *numCoeffs = -1;
 
@@ -332,7 +332,7 @@ public:
     }
 
     void setState(const char* key, const char* value) override {
-        std::cout << "setState\n" << std::flush;
+        //std::cout << "setState\n" << std::flush;
         if (!std::strcmp(key, "topTF")) {
             processTFString(value, true);
         } else if (!std::strcmp(key, "bottomTF")) {
@@ -364,26 +364,34 @@ public:
 
         int found = 0;
         double outputCopy[frames];
-        // fRuni++;
-        // if (fRuni > 99999) {
-        //     fPrevChangei -= fRuni;
-        //     fRuni = 0;
-        // }
 
         for (int i = 0; i < frames; i++) {
-            double res = 0;
+            double res = 1e-20;
 
-            // if (fTFChanged) {
-            //     for (int j = 0; j < 100; j++) {
-            //         topTF[j] = fOldTop[j] * (1 - alpha * fInterpolIter) + fNewTop[j] * alpha * fInterpolIter;
-            //         bottomTF[j] = fOldBottom[j] * (1 - alpha * fInterpolIter) + fNewBottom[j] * alpha * fInterpolIter;
-            //     }
-            //     fInterpolIter++;
-            //     if (fInterpolIter >= (1 / alpha)) {
-            //         std::cout << "Done" << std::endl;
-            //         fTFChanged = false;
-            //     }
-            // }
+            fRuni++;
+            if(fRuni > 99999) {
+                fPrevChangei -= fRuni;
+                fRuni = 0;
+            }
+
+            if (fTFChanged && (fRuni - fPrevChangei > 100)) {
+                fPrevChangei = fRuni;
+                // for (int j = 0; j < 100; j++) {
+                //     topTF[j] = fOldTop[j] * (1 - alpha * fInterpolIter) + fNewTop[j] * alpha * fInterpolIter;
+                //     bottomTF[j] = fOldBottom[j] * (1 - alpha * fInterpolIter) + fNewBottom[j] * alpha * fInterpolIter;
+                // }
+                // fInterpolIter++;
+                // if (fInterpolIter >= (1 / alpha)) {
+                //     std::cout << "Done" << std::endl;
+                //     fTFChanged = false;
+                // }
+
+                std::memcpy(topTF, fNewTop, sizeof(fNewTop));
+                std::memcpy(bottomTF, fNewBottom, sizeof(fNewBottom));
+                std::memset(inMem, 0, sizeof(inMem));
+                std::memset(outMem, 0, sizeof(outMem));
+                fTFChanged = false;
+            }
             
             if (i > 98) {
                 for (int j = 0; j < 100; j++) {
@@ -410,11 +418,13 @@ public:
             outputs[0][i] = static_cast<float>(res);
             outputCopy[i] = res;
 
+            //std::cerr << outputs[0][i] << std::endl;
+
             uint32_t bits;
             std::memcpy(&bits, &outputs[0][i], sizeof(bits));
 
             if (bits == 0xFFC00000) {
-                std::cout << "TOO LOUD" << std::endl;
+                //std::cout << "TOO LOUD" << std::endl;
                 fMaxValCount++;
                 if (fMaxValCount > 100) {
                     fMaxValCount = 0;
