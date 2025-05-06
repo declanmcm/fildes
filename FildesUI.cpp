@@ -238,6 +238,10 @@ class CustomButton : public CairoSubWidget,
         void setLabel(std::string newLabel) {
             fLabel = newLabel;
         }
+
+        void toggleActive(void) {
+            fIsPressed = !fIsPressed;
+        }
     
     protected:
         void onCairoDisplay(const CairoGraphicsContext& context) override
@@ -246,7 +250,7 @@ class CustomButton : public CairoSubWidget,
     
             // Draw button background with different colors based on state
             if (fIsPressed) {
-                cairo_set_source_rgb(cr, 0.4, 0.4, 0.8); // Darker blue when pressed
+                cairo_set_source_rgb(cr, 0.01176470588, 0.98823529411, 0.41960784313);
             } else if (fIsHovered) {
                 cairo_set_source_rgb(cr, 0.5, 0.5, 0.9); // Lighter blue when hovered
             } else {
@@ -662,7 +666,7 @@ class TransferFunctionVisualizer {
          mNeedsUpdate = true;
      }
  
-     double calculateResponse(double maxA) {
+     double calculateResponse(double maxA, bool push) {
          if (!mNeedsUpdate) {
              return 0.0;
          }
@@ -699,7 +703,7 @@ class TransferFunctionVisualizer {
 
              double absMagnitude = std::abs(response);
 
-             if ((absMagnitude > maxA) && (absMagnitude > scaleFactor))
+             if (((!push && absMagnitude > maxA) || push) && (absMagnitude > scaleFactor))
                 scaleFactor = absMagnitude;
              
              // Calculate magnitude in dB and phase
@@ -1114,6 +1118,7 @@ class FildesUI : public UI,
      ScopedPointer<EditableText> fBandwidthInput;
      ScopedPointer<EditableText> fMaxAInput;
      ScopedPointer<CustomButton> fGenerateButton;
+     ScopedPointer<CustomButton> fToLimitButton;
 
 
     ScopedPointer<EditableText> *fTextInputs[8];
@@ -1141,6 +1146,7 @@ class FildesUI : public UI,
 
      bool fCoeffToBeSent = false;
      bool fSendScheduled = false;
+     bool fPush = false;
  
  public:
      FildesUI()
@@ -1251,10 +1257,15 @@ class FildesUI : public UI,
         fBandwidthInput->setVisible(false);
 
         // Create generate button
-        fGenerateButton = new CustomButton(this, "Start Tracking");
+        fGenerateButton = new CustomButton(this, "Track changes");
         fGenerateButton->setAbsolutePos(150, 570);
         fGenerateButton->setSize(150, 40);
         fGenerateButton->setCallback(this);
+
+        fToLimitButton = new CustomButton(this, "Amp. to limit");
+        fToLimitButton->setAbsolutePos(310, 570);
+        fToLimitButton->setSize(150, 40);
+        fToLimitButton->setCallback(this);
 
         // Add these to the fTextInputs array
         fTextInputs[3] = &fFrequencyInput;
@@ -1361,7 +1372,7 @@ class FildesUI : public UI,
      void drawFrequencyResponse(cairo_t* cr)
      {
          // Calculate the response if needed
-         double factor = fVisualizer.calculateResponse(fMaxA);
+         double factor = fVisualizer.calculateResponse(fMaxA, fPush);
          if (factor != 0.0) {
             std::vector<double> num = fVisualizer.getNumerator();
             std::vector<double> newNum;
@@ -1371,7 +1382,7 @@ class FildesUI : public UI,
 
             fNumerator = newNum;
             fVisualizer.setNumerator(fNumerator);
-            fVisualizer.calculateResponse(fMaxA);
+            fVisualizer.calculateResponse(fMaxA, fPush);
 
             std::string numStr = formatCoefficients(fNumerator, false);
             fCoeffT->setText(numStr);
@@ -2036,14 +2047,17 @@ class FildesUI : public UI,
         if (button == fGenerateButton.get()) {
             if (fGeneratorTracking) {
                 fGeneratorTracking = false;
-                fGenerateButton->setLabel("Start Tracking");
             } else {
                 fGeneratorTracking = true;
                 fUpdatedFromFG = true;
-                fGenerateButton->setLabel("Stop Tracking");
                 fUpdatedFromPZP = fUpdatedFromTF = false;
                 generateFilter();
             }
+            fGenerateButton->toggleActive();
+            repaint();
+        } else if (button == fToLimitButton.get()) {
+            fPush = !fPush;
+            fToLimitButton->toggleActive();
             repaint();
         }
     }

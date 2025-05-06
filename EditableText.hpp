@@ -358,28 +358,80 @@ protected:
     }
 
     void removeChar(void) {
-        fText = fText.substr(0, cursorPosition - 1) + fText.substr(cursorPosition, fText.length() - (cursorPosition - 1));
+        if (fText[cursorPosition - 1] == ',') {
+            std::string toSet = fText.substr(0, cursorPosition - 1);
+            bool leftHasPoint = false;
+            int i = cursorPosition - 2;
+            if (i != -1) {
+                while  (i >= 0 && fText[i] != ',') {
+                    if (fText[i] == '.') leftHasPoint = true;
+                    i--;
+                }
+            }
+            i = cursorPosition;
+            std::cout << "leftHasPoint: " << leftHasPoint << std::endl;
+            while (i < fText.length() && fText[i] != ',') {
+                if (((leftHasPoint && fText[i] != '.') || !leftHasPoint) && fText[i] != '-') {
+                    if (fText[i] == '.')
+                        std::cout << fText[i] << std::endl;
+                    toSet += fText[i];
+                }
+                i++;
+            }
+            std::cout << "done" << std::endl;
+            fText = toSet + fText.substr(i, fText.length() - (i - 1));
+        } else
+            fText = fText.substr(0, cursorPosition - 1) + fText.substr(cursorPosition, fText.length() - (cursorPosition - 1));
         cursorPosition--;
+    }
+
+    void insertPoint(void) {
+        std::string coeff = "";
+        int i = cursorPosition - 1;
+        while (i >= 0 && fText[i] != ',') {
+            coeff = fText[i] + coeff;
+            i--;
+        }
+        i = cursorPosition;
+        while (i < fText.length() && fText[i] != ',') {
+            coeff += fText[i];
+            i++;
+        }
+        bool found = false;
+        for (int i = 0; i < coeff.length(); i++) {
+            if (coeff[i] == '.') {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            insertChar('.');
+        }
     }
 
     bool onKeyboard(const KeyboardEvent& ev) override
     {
         if (this->isFocused() && ev.press)
         {
-            if (fType == "G" || fType == "M") {
-                if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1])) {
-                    if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
-                    if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
-                    fText += ev.key;
-                    repaint();
+            if (fType == "G" || fType == "M" || fType == " ") {
+                if (ev.key >= '0' && ev.key <= '9')
+                    insertChar(ev.key);
+                else if (ev.key == '.')
+                    insertPoint();
+                else if (ev.key == '-') {
+                    if ((cursorPosition == fText.length() || (fText[cursorPosition] != '-')) && (cursorPosition == 0 || fText[cursorPosition - 1] == ','))
+                        insertChar(ev.key);
                 }
-                else if (ev.key == 8 && !fText.empty()) // Handle backspace
-                {
-                    if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
-                    if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
-                    fText.pop_back();
-                    repaint();
+                else if (ev.key == 8 && cursorPosition != 0)
+                    removeChar();
+                else if (ev.key == 127 && cursorPosition != fText.length()) {
+                    cursorPosition++;
+                    removeChar();
                 }
+                else if (ev.key == 57397 && cursorPosition != 0)
+                    cursorPosition--;
+                else if (ev.key == 57399 && cursorPosition != fText.length())
+                    cursorPosition++;
                 else if (ev.key == 13 && fType == "G") // Use enter key to apply gain
                 {
                     this->setFocused(false);
@@ -388,18 +440,21 @@ protected:
                     fText = "";
                     fPoint[fCoeffCount - 1] = false;
                     fMinus[fCoeffCount - 1] = false;
-                    repaint();
                 }
                 if (fType == "M" && fCallback) {
                     fCallback->setMaxA(fText);
                 }
-            } else {
-                if ((ev.key >= '0' && ev.key <= '9') || ev.key == ',') {
-                    insertChar(ev.key);
+                if (fType == " " && fCallback) {
+                    fCallback->generateIfTracking();
                 }
-                else if (ev.key == 8 && !fText.empty())
+            } else {
+                if (ev.key >= '0' && ev.key <= '9')
+                    insertChar(ev.key);
+                else if (ev.key == ',')
+                    insertChar(ev.key);
+                else if (ev.key == 8 && cursorPosition != 0)
                     removeChar();
-                else if (ev.key == 127) {
+                else if (ev.key == 127 && cursorPosition != fText.length()) {
                     cursorPosition++;
                     removeChar();
                 }
@@ -407,47 +462,19 @@ protected:
                     if ((cursorPosition == fText.length() || (fText[cursorPosition] != '-')) && (cursorPosition == 0 || fText[cursorPosition - 1] == ','))
                         insertChar(ev.key);
                 }
-                else if (ev.key == '.') {
-                    std::string coeff = "";
-                    int i = cursorPosition - 1;
-                    while (i >= 0 && fText[i] != ',') {
-                        coeff = fText[i] + coeff;
-                        i--;
-                    }
-                    i = cursorPosition;
-                    while (i < fText.length() && fText[i] != ',') {
-                        coeff += fText[i];
-                        i++;
-                    }
-                    bool found = false;
-                    for (int i = 0; i < coeff.length(); i++) {
-                        if (coeff[i] == '.') {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        insertChar(ev.key);
-                    }
-                }
+                else if (ev.key == '.')
+                    insertPoint();
                 else if (ev.key == 57397 && cursorPosition != 0)
                     cursorPosition--;
                 else if (ev.key == 57399 && cursorPosition != fText.length())
                     cursorPosition++;
-                else if (ev.key == 13) // Enter key
-                {
-                    this->setFocused(false); // Lose focus on Enter
-                    repaint();
-                }
-                if (fCallback) {
-                    if (fType != " ")
-                        fCallback->setTF(fType + fText);
-                    else
-                        fCallback->generateIfTracking();
-                }
-                repaint();
+                else if (ev.key == 13)
+                    this->setFocused(false);
+                if (fCallback)
+                    fCallback->setTF(fType + fText);
             }
         }
+        repaint();
         return KeyboardEventHandler::keyboardEvent(ev);
     }
 
