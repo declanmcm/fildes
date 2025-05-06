@@ -16,7 +16,6 @@
  */
 
  #include "DistrhoUI.hpp"
-
  #include "Artwork.hpp"
  #include "DemoWidgetBanner.hpp"
  #include "DemoWidgetClickable.hpp"
@@ -32,7 +31,6 @@
  #include <functional>
  #include "Eigen/Eigen"
 
- 
 // RBJ Cookbook Filter Generator class (to replace existing FilterGenerator)
 class RBJFilterGenerator {
     public:
@@ -627,6 +625,10 @@ class TransferFunctionVisualizer {
          }
          std::cout << std::endl;
      }
+
+     void forceUpdate() {
+        mNeedsUpdate = true;
+     }
  
      void setDenominator(const std::vector<double>& coeffs) {
          mDenominator = coeffs;
@@ -651,7 +653,7 @@ class TransferFunctionVisualizer {
          // Create logarithmic frequency scale from 20Hz to Nyquist
          const double nyquist = mSampleRate / 2.0;
          const double minFreq = 20.0;
-         const int numPoints = 200;
+         const int numPoints = 400;
          
          mFrequencies.resize(numPoints);
          
@@ -718,6 +720,34 @@ class TransferFunctionVisualizer {
             return maxA / scaleFactor;
         else return scaleFactor;
      }
+
+     std::complex<double> getComplexResponseAtFrequency(double frequency) const
+    {
+        const double w = 2.0 * M_PI * frequency / mSampleRate;
+        
+        std::complex<double> numerator(0.0, 0.0);
+        std::complex<double> denominator(0.0, 0.0);
+        
+        // Calculate z^-k = e^(-jwk)
+        for (size_t k = 0; k < mNumerator.size(); ++k) {
+            double phase = -w * k;
+            std::complex<double> z(std::cos(phase), std::sin(phase));
+            numerator += mNumerator[k] * z;
+        }
+        
+        for (size_t k = 0; k < mDenominator.size(); ++k) {
+            double phase = -w * k;
+            std::complex<double> z(std::cos(phase), std::sin(phase));
+            denominator += mDenominator[k] * z;
+        }
+        
+        // Prevent division by zero
+        if (std::abs(denominator) < 1e-10) {
+            return std::complex<double>(0.0, 0.0);
+        }
+        
+        return numerator / denominator;
+    }
  
      // Find roots of a polynomial using companion matrix method
      std::vector<std::complex<double>> findRoots(const std::vector<double>& coeffs) {
@@ -1137,6 +1167,9 @@ class FildesUI : public UI,
  
      // Area for the pole-zero plot
      DGL::Rectangle<int> fPoleZeroArea;
+
+
+    DGL::Rectangle<int> fNyquistArea;
      
      // Dragging state
      bool fIsDragging, fDraggingPole, fGeneratorTracking, fUpdatedFromTF, fUpdatedFromPZP, fUpdatedFromFG, fFilterUnstable;
@@ -1199,6 +1232,7 @@ class FildesUI : public UI,
          // Set up the response and pole-zero areas
          fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
          fPoleZeroArea = DGL::Rectangle<int>(500, 385, 250, 250);
+        fNyquistArea = DGL::Rectangle<int>(775, 150, 200, 200);
          
          // Initialize dragging state
          fIsDragging = false;
@@ -1364,15 +1398,151 @@ class FildesUI : public UI,
          }
  
          drawFrequencyResponse(cr);
- 
+         drawNyquistPlot(cr);
          drawPoleZeroPlot(cr);
         drawFilterParameterLabels(cr);
      }
+
+     void drawNyquistPlot(cairo_t* cr)
+    {
+        // Prepare the plot area
+        const int x = fNyquistArea.getX();
+        const int y = fNyquistArea.getY();
+        const int width = fNyquistArea.getWidth();
+        const int height = fNyquistArea.getHeight();
+        const int centerX = x + width / 2;
+        const int centerY = y + height / 2;
+        
+        // Draw border and background
+        cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+        cairo_rectangle(cr, x, y, width, height);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+        
+        // Draw axes
+        cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
+        cairo_set_line_width(cr, 1.0);
+        
+        // Horizontal axis (real part)
+        cairo_move_to(cr, x, centerY);
+        cairo_line_to(cr, x + width, centerY);
+        
+        // Vertical axis (imaginary part)
+        cairo_move_to(cr, centerX, y);
+        cairo_line_to(cr, centerX, y + height);
+        
+        cairo_stroke(cr);
+        
+        // Draw unit circle
+        cairo_set_source_rgba(cr, 0.5, 0.5, 0.5, 0.3);
+        cairo_arc(cr, centerX, centerY, width / 4, 0, 2 * M_PI);
+        cairo_stroke(cr);
+        
+        // Calculate and draw Nyquist plot
+        const std::vector<double>& frequencies = fVisualizer.getFrequencies();
+        
+        if (frequencies.empty()) {
+            return;
+        }
+        
+        // Get frequency response at each point
+        std::vector<std::complex<double>> nyquistPoints;
+        double maxMagnitude = 0.0;
+        
+        for (const auto& freq : frequencies) {
+            std::complex<double> response = fVisualizer.getComplexResponseAtFrequency(freq);
+            nyquistPoints.push_back(response);
+            
+            double magnitude = std::abs(response);
+            if (magnitude > maxMagnitude) {
+                maxMagnitude = magnitude;
+            }
+        }
+        
+        // Scale factor to fit the plot (use min dimension)
+        double scaleFactor = (std::min(width, height) / 2) / (maxMagnitude * 1.2);
+        
+        // Plot the Nyquist curve
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.8);
+        if (fFilterUnstable) cairo_set_source_rgb(cr, 0.8, 0.0, 0.0);
+        cairo_set_line_width(cr, 2.0);
+        
+        cairo_new_path(cr);
+        
+        bool firstPoint = true;
+        for (const auto& point : nyquistPoints) {
+            double plotX = centerX + point.real() * scaleFactor;
+            double plotY = centerY - point.imag() * scaleFactor;
+            
+            if (firstPoint) {
+                cairo_move_to(cr, plotX, plotY);
+                firstPoint = false;
+            } else {
+                cairo_line_to(cr, plotX, plotY);
+            }
+        }
+        
+        cairo_stroke(cr);
+        
+        // Mark specific frequencies
+        const double markedFreqs[] = {20, 100, 1000, 10000, 20000};
+        for (const auto& markedFreq : markedFreqs) {
+            // Find closest frequency in our data
+            size_t index = 0;
+            double minDiff = std::abs(frequencies[0] - markedFreq);
+            
+            for (size_t i = 1; i < frequencies.size(); ++i) {
+                double diff = std::abs(frequencies[i] - markedFreq);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    index = i;
+                }
+            }
+            
+            // Draw a small circle at this frequency point
+            double plotX = centerX + nyquistPoints[index].real() * scaleFactor;
+            double plotY = centerY - nyquistPoints[index].imag() * scaleFactor;
+            
+            cairo_set_source_rgb(cr, 0.8, 0.0, 0.0);
+            cairo_arc(cr, plotX, plotY, 3.0, 0, 2 * M_PI);
+            cairo_fill(cr);
+            
+            // Label the frequency
+            cairo_set_font_size(cr, 9);
+            std::string label;
+            if (markedFreq >= 1000) {
+                label = std::to_string(static_cast<int>(markedFreq / 1000)) + "k";
+            } else {
+                label = std::to_string(static_cast<int>(markedFreq));
+            }
+            
+            cairo_move_to(cr, plotX + 5, plotY - 5);
+            cairo_show_text(cr, label.c_str());
+        }
+        
+        // Draw title
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 14);
+        cairo_move_to(cr, x + 10, y + 20);
+        cairo_show_text(cr, "Nyquist Plot");
+        
+        // Draw axis labels
+        cairo_set_font_size(cr, 10);
+        cairo_move_to(cr, x + width - 30, centerY + 15);
+        cairo_show_text(cr, "Re");
+        
+        cairo_move_to(cr, centerX - 15, y + 15);
+        cairo_show_text(cr, "Im");
+    }
  
      void drawFrequencyResponse(cairo_t* cr)
      {
          // Calculate the response if needed
          double factor = fVisualizer.calculateResponse(fMaxA, fPush);
+         std::cout << "factor: " << factor << std::endl;
          if (factor != 0.0) {
             std::vector<double> num = fVisualizer.getNumerator();
             std::vector<double> newNum;
@@ -2058,6 +2228,7 @@ class FildesUI : public UI,
         } else if (button == fToLimitButton.get()) {
             fPush = !fPush;
             fToLimitButton->toggleActive();
+            fVisualizer.forceUpdate();
             repaint();
         }
     }
