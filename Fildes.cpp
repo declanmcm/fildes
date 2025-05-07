@@ -32,8 +32,8 @@ class Fildes : public Plugin
     double fNewBottom[100];
     double fOldTop[100];
     double fOldBottom[100];
-    double outMem[100];
-	double inMem[100];
+    double outMem[2][100];
+	double inMem[2][100];
 	double gain;
     double alpha;
     int numCoeffsTop, numCoeffsBottom, outi, ini, xz1, xz2, yz1, yz2, fRuni, fPrevChangei, fInterpolIter, fMaxValCount;
@@ -50,6 +50,7 @@ public:
         std::memset(fOldTop, 0, sizeof(fOldTop));
         std::memset(fOldBottom, 0, sizeof(fOldBottom));
         bottomTF[0] = 1;
+        topTF[0] = 1;
         fNewBottom[0] = 1;
         std::memset(outMem, 0, sizeof(outMem));
         std::memset(inMem, 0, sizeof(inMem));
@@ -73,7 +74,7 @@ public:
     */
     const char* getLabel() const override
     {
-        return "cairo_ui";
+        return "fildes";
     }
 
    /**
@@ -81,7 +82,7 @@ public:
     */
     const char* getDescription() const override
     {
-        return "Cairo DPF Example";
+        return "An educational filter designer";
     }
 
    /**
@@ -89,7 +90,7 @@ public:
     */
     const char* getMaker() const override
     {
-        return "DISTRHO";
+        return "Declan McMahon";
     }
 
    /**
@@ -98,7 +99,7 @@ public:
     */
     const char* getLicense() const override
     {
-        return "ISC";
+        return "MIT";
     }
 
    /**
@@ -231,62 +232,64 @@ public:
         int found = 0;
         double outputCopy[frames];
 
-        for (int i = 0; i < frames; i++) {
-            double res = 1e-20;
+        for (int n = 0; n < 2; n++) {
+            for (int i = 0; i < frames; i++) {
+                double res = 1e-20;
 
-            fRuni++;
-            if(fRuni > 99999) {
-                fPrevChangei -= fRuni;
-                fRuni = 0;
-            }
-
-            if (fTFChanged && (fRuni - fPrevChangei > 100)) {
-                fPrevChangei = fRuni;
-
-                std::memcpy(topTF, fNewTop, sizeof(fNewTop));
-                std::memcpy(bottomTF, fNewBottom, sizeof(fNewBottom));
-                std::memset(inMem, 0, sizeof(inMem));
-                std::memset(outMem, 0, sizeof(outMem));
-                fTFChanged = false;
-            }
-            
-            if (i > 98) {
-                for (int j = 0; j < 100; j++) {
-                    res += (double)inputs[0][i - j] * topTF[j];
-                    if (j != 0) res -= (double)outputCopy[i - j] * bottomTF[j];
+                fRuni++;
+                if(fRuni > 99999) {
+                    fPrevChangei -= fRuni;
+                    fRuni = 0;
                 }
-                if (frames - i <= 100) {
-                    inMem[(++ini) % 100] = (double)inputs[0][i];
-                    outMem[(++outi) % 100] = res;
-                }
-            } else {
-                for (int j = 0; j < i + 1; j++) {
-                    res += (double)inputs[0][i - j] * topTF[j];
-                    if (j != 0) res -= (double)outputCopy[i - j] * bottomTF[j];
-                }
-                for (int j = 0; j < 99 - i; j++) {
-                    int inIndex = (ini - j) % 100;
-                    int outIndex = (outi - j) % 100;
-                    res += inMem[inIndex] * topTF[i + 1 + j];
-                    if (i + 1 + j != 0) res -= outMem[outIndex] * bottomTF[i + 1 + j];
-                }
-            }
 
-            outputs[0][i] = static_cast<float>(res);
-            outputCopy[i] = res;
+                if (fTFChanged && (fRuni - fPrevChangei > 100)) {
+                    fPrevChangei = fRuni;
 
-            //std::cerr << outputs[0][i] << std::endl;
-
-            uint32_t bits;
-            std::memcpy(&bits, &outputs[0][i], sizeof(bits));
-
-            if (bits == 0xFFC00000) {
-                //std::cout << "TOO LOUD" << std::endl;
-                fMaxValCount++;
-                if (fMaxValCount > 100) {
-                    fMaxValCount = 0;
+                    std::memcpy(topTF, fNewTop, sizeof(fNewTop));
+                    std::memcpy(bottomTF, fNewBottom, sizeof(fNewBottom));
                     std::memset(inMem, 0, sizeof(inMem));
                     std::memset(outMem, 0, sizeof(outMem));
+                    fTFChanged = false;
+                }
+                
+                if (i > 98) {
+                    for (int j = 0; j < 100; j++) {
+                        res += (double)inputs[n][i - j] * topTF[j];
+                        if (j != 0) res -= (double)outputCopy[i - j] * bottomTF[j];
+                    }
+                    if (frames - i <= 100) {
+                        inMem[n][(++ini) % 100] = (double)inputs[n][i];
+                        outMem[n][(++outi) % 100] = res;
+                    }
+                } else {
+                    for (int j = 0; j < i + 1; j++) {
+                        res += (double)inputs[n][i - j] * topTF[j];
+                        if (j != 0) res -= (double)outputCopy[i - j] * bottomTF[j];
+                    }
+                    for (int j = 0; j < 99 - i; j++) {
+                        int inIndex = (ini - j) % 100;
+                        int outIndex = (outi - j) % 100;
+                        res += inMem[n][inIndex] * topTF[i + 1 + j];
+                        if (i + 1 + j != 0) res -= outMem[n][outIndex] * bottomTF[i + 1 + j];
+                    }
+                }
+
+                outputs[n][i] = static_cast<float>(res);
+                outputCopy[i] = res;
+
+                //std::cerr << outputs[n][i] << std::endl;
+
+                uint32_t bits;
+                std::memcpy(&bits, &outputs[n][i], sizeof(bits));
+
+                if (bits == 0xFFC00000) {
+                    //std::cout << "TOO LOUD" << std::endl;
+                    fMaxValCount++;
+                    if (fMaxValCount > 100) {
+                        fMaxValCount = 0;
+                        std::memset(inMem, 0, sizeof(inMem));
+                        std::memset(outMem, 0, sizeof(outMem));
+                    }
                 }
             }
         }

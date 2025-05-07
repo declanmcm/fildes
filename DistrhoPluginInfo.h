@@ -25,19 +25,19 @@
    Number of audio inputs the plugin has.
    @note This macro is required.
  */
-#define DISTRHO_PLUGIN_NUM_INPUTS 1
+#define DISTRHO_PLUGIN_NUM_INPUTS 2
 
 /**
    Number of audio outputs the plugin has.
    @note This macro is required.
  */
-#define DISTRHO_PLUGIN_NUM_OUTPUTS 1
+#define DISTRHO_PLUGIN_NUM_OUTPUTS 2
 
 /**
    The plugin URI when exporting in LV2 format.
    @note This macro is required.
  */
-#define DISTRHO_PLUGIN_URI "http://www.google.com"
+#define DISTRHO_PLUGIN_URI ""
 
 /**
    The AudioUnit manufacturer for a plugin.
