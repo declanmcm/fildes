@@ -15,6 +15,17 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+ #if __cplusplus <= 201103L
+#include <memory>
+
+namespace std {
+    template<typename T, typename... Args>
+    std::unique_ptr<T> make_unique(Args&&... args) {
+        return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+    }
+}
+#endif
+
  #include "DistrhoUI.hpp"
  #include "Artwork.hpp"
  #include "DemoWidgetBanner.hpp"
@@ -31,8 +42,8 @@
  #include <functional>
  #include "Eigen/Eigen"
 
-// RBJ Cookbook Filter Generator class (to replace existing FilterGenerator)
-class RBJFilterGenerator {
+
+ class RBJFilterGenerator {
     public:
         enum FilterType {
             LOW_PASS,
@@ -182,6 +193,127 @@ class RBJFilterGenerator {
     private:
         double mSampleRate;
     };
+
+class HelpButton : public CairoSubWidget,
+        public ButtonEventHandler,
+        public ButtonEventHandler::Callback
+    {
+    public:
+        class Callback {
+        public:
+            virtual ~Callback() {}
+            virtual void buttonClicked(HelpButton* button) = 0;
+        };
+
+        explicit HelpButton(SubWidget* const parent, const std::string& helpText, const std::string& helpTitle)
+            : CairoSubWidget(parent),
+              ButtonEventHandler(this),
+              fCallback(nullptr),
+              fHovered(false),
+              fHelpText(helpText),
+              fHelpTitle(helpTitle)
+        {
+            ButtonEventHandler::setCallback(this);
+        }
+
+        explicit HelpButton(TopLevelWidget* const parent, const std::string& helpText, const std::string& helpTitle)
+            : CairoSubWidget(parent),
+              ButtonEventHandler(this),
+              fCallback(nullptr),
+              fHovered(false),
+              fHelpText(helpText),
+              fHelpTitle(helpTitle)
+        {
+            ButtonEventHandler::setCallback(this);
+        }
+        
+        void setCallback(Callback* const callback) noexcept
+        {
+            fCallback = callback;
+        }
+
+        void setId(uint32_t id) noexcept
+        {
+            fHelpId = id;
+        }
+
+        uint32_t getId() const noexcept
+        {
+            return fHelpId;
+        }
+
+        const std::string& getHelpText() const {
+            return fHelpText;
+        }
+
+        const std::string& getHelpTitle() const {
+            return fHelpTitle;
+        }
+
+    protected:
+        void onCairoDisplay(const CairoGraphicsContext& context) override {
+            cairo_t* cr = context.handle;
+            if (!cr) return;
+            
+            // Draw circle
+            if (fHovered) {
+                cairo_set_source_rgb(cr, 0.3, 0.6, 1.0);
+            } else {
+                cairo_set_source_rgb(cr, 0.5, 0.5, 0.8);
+            }
+            
+            const int size = getWidth();
+            cairo_arc(cr, size/2, size/2, size/2 - 1, 0, 2 * M_PI);
+            cairo_fill_preserve(cr);
+            
+            cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+            cairo_set_line_width(cr, 1.0);
+            cairo_stroke(cr);
+            
+            // Draw question mark
+            cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, size * 0.7);
+            cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+            
+            // Center the question mark
+            cairo_text_extents_t extents;
+            cairo_text_extents(cr, "?", &extents);
+            cairo_move_to(cr, 
+                         size/2 - extents.width/2 - extents.x_bearing, 
+                         size/2 - extents.height/2 - extents.y_bearing);
+            cairo_show_text(cr, "?");
+        }
+        
+        bool onMouse(const MouseEvent& ev) override
+        {
+            return ButtonEventHandler::mouseEvent(ev);
+        }
+        
+        void buttonClicked(SubWidget*, int button) override
+        {
+            if (button != 1) return;
+            
+            if (fCallback != nullptr) {
+                fCallback->buttonClicked(this);
+            }
+        }
+        
+        bool onMotion(const MotionEvent& ev) override {
+            bool inside = contains(ev.pos);
+            if (inside != fHovered) {
+                fHovered = inside;
+                repaint();
+            }
+            return CairoSubWidget::onMotion(ev);
+        }
+
+    private:
+        Callback* fCallback;
+        bool fHovered;
+        std::string fHelpText;
+        std::string fHelpTitle;
+        int fHelpId;
+    };
     
     // Add this class for a custom button widget (to be used for the Generate button)
 class CustomButton : public CairoSubWidget,
@@ -237,6 +369,10 @@ class CustomButton : public CairoSubWidget,
             fLabel = newLabel;
         }
 
+        void setInactive(void) {
+            fIsPressed = false;
+        }
+
         void toggleActive(void) {
             fIsPressed = !fIsPressed;
         }
@@ -248,7 +384,7 @@ class CustomButton : public CairoSubWidget,
     
             // Draw button background with different colors based on state
             if (fIsPressed) {
-                cairo_set_source_rgb(cr, 0.01176470588, 0.98823529411, 0.41960784313);
+                cairo_set_source_rgb(cr, 0.0, 0.8, 0.0);
             } else if (fIsHovered) {
                 cairo_set_source_rgb(cr, 0.5, 0.5, 0.9); // Lighter blue when hovered
             } else {
@@ -609,7 +745,6 @@ class TransferFunctionVisualizer {
          , mZeros()
          , mPoles()
      {
-         // Initialize with default frequency points (logarithmic scale)
          updateFrequencyPoints();
      }
  
@@ -1134,7 +1269,8 @@ class FildesUI : public UI,
                         public DemoWidgetClickable::Callback,
                         public EditableText::Callback,
                         public CustomButton::Callback,
-                        public Dropdown::Callback
+                        public Dropdown::Callback,
+                        public HelpButton::Callback
  {
      ScopedPointer<DemoWidgetClickable> fWidgetClickable;
      ScopedPointer<EditableText> fCoeffT, fCoeffB;
@@ -1152,6 +1288,12 @@ class FildesUI : public UI,
 
 
     ScopedPointer<EditableText> *fTextInputs[8];
+
+
+    std::vector<std::unique_ptr<HelpButton>> fHelpButtons;
+    std::string fCurrentHelpText;
+    std::string fCurrentHelpTitle;
+    DGL::Rectangle<int> fHelpBox;
  
      // Add the visualizer
      TransferFunctionVisualizer fVisualizer;
@@ -1162,18 +1304,12 @@ class FildesUI : public UI,
      std::vector<double> fNumerator;
      std::vector<double> fDenominator;
      
-     // Area for the frequency response plot
-     DGL::Rectangle<int> fResponseArea;
- 
-     // Area for the pole-zero plot
-     DGL::Rectangle<int> fPoleZeroArea;
-
-
+    DGL::Rectangle<int> fResponseArea;
+    DGL::Rectangle<int> fPoleZeroArea;
     DGL::Rectangle<int> fNyquistArea;
      
-     // Dragging state
-     bool fIsDragging, fDraggingPole, fGeneratorTracking, fUpdatedFromTF, fUpdatedFromPZP, fUpdatedFromFG, fFilterUnstable;
-     double fDragStartX, fDragStartY, fMaxA;
+    bool fIsDragging, fDraggingPole, fGeneratorTracking, fUpdatedFromTF, fUpdatedFromPZP, fUpdatedFromFG, fFilterUnstable;
+    double fDragStartX, fDragStartY, fMaxA;
  
      int fDraggedIndex;
 
@@ -1190,8 +1326,8 @@ class FildesUI : public UI,
          freopen("nums.txt", "w", stderr);
          
          // Initialize with default filter coefficients
-         parseCoefficients("0,0,0,1", fNumerator);
-         parseCoefficients("1,0,0,0", fDenominator);
+         parseCoefficients("1", fNumerator);
+         parseCoefficients("1", fDenominator);
          fVisualizer.setNumerator(fNumerator);
          fVisualizer.setDenominator(fDenominator);
          fGeneratorTracking = false;
@@ -1208,6 +1344,7 @@ class FildesUI : public UI,
          fCoeffT->setAbsolutePos(150, 50);
          fCoeffT->setSize(500, 30);
          fCoeffT->setCallback(this);
+         fCoeffT->setText("1");
  
          fCoeffB = new EditableText(this, "B");
          fCoeffB->setAbsolutePos(170, 100);
@@ -1216,23 +1353,23 @@ class FildesUI : public UI,
 
         fMaxAInput = new EditableText(this, "M");
         fMaxAInput->setAbsolutePos(750, 50);
-        fMaxAInput->setSize(70, 30);
+        fMaxAInput->setSize(100, 30);
         fMaxAInput->setCallback(this);
         fMaxAInput->setText("");
-        fMaxA = 99999999;
+        fMaxA = 99999999999;
 
          // Create gain input field
         fGainInput = new EditableText(this, "G");
         fGainInput->setAbsolutePos(750, 100);
-        fGainInput->setSize(70, 30);
+        fGainInput->setSize(100, 30);
         fGainInput->setCallback(this);
         fGainInput->setText("");
 
-         
          // Set up the response and pole-zero areas
-         fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
-         fPoleZeroArea = DGL::Rectangle<int>(500, 385, 250, 250);
+        fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
+        fPoleZeroArea = DGL::Rectangle<int>(500, 385, 250, 250);
         fNyquistArea = DGL::Rectangle<int>(775, 150, 200, 200);
+        fHelpBox = DGL::Rectangle<int>(775, 385, 200, 250);
          
          // Initialize dragging state
          fIsDragging = false;
@@ -1297,7 +1434,7 @@ class FildesUI : public UI,
         fGenerateButton->setCallback(this);
 
         fToLimitButton = new CustomButton(this, "Amp. to limit");
-        fToLimitButton->setAbsolutePos(310, 570);
+        fToLimitButton->setAbsolutePos(320, 570);
         fToLimitButton->setSize(150, 40);
         fToLimitButton->setCallback(this);
 
@@ -1313,7 +1450,32 @@ class FildesUI : public UI,
 
         // Initialize visibility based on current filter type
         updateFilterParametersVisibility();
+
+        fCurrentHelpTitle = "Welcome to Fildes";
+        fCurrentHelpText = "Use the transfer function numerator/denominator text boxes, the pole/zero plot (dragging poles or zeros) or the filter generator to shape the filter. As you make changes, you will hear it, see its trans. func. coefficients, see its magnitude and phase response and pole/zero positions.";
+        
+        // Initialize help buttons
+        createHelpButtons();
      }
+
+     void createHelpButtons() {
+        // Create help buttons for major UI sections
+        createHelpButton(195, 16, 1, "Transfer Function", "The transfer function is a direct mathematical representation of the filter's nature and implementation. The numerator coefficients are respectively multiplied (or convolved) with the audio inputs, similarly to the denominator coefficients with the audio outputs");
+        createHelpButton(630, 35, 2, "Numerator", "These coefficients correspond to the zeros of the filter.");
+        createHelpButton(630, 85, 3, "Denominator", "These coefficients correspond to the poles of the filter. The first coefficient is always set to 1.");
+        createHelpButton(755, 150, 4, "Frequency Response", "A logarithmic display of the magnitude response of the filter from 20Hz to 20kHz.");
+        createHelpButton(980, 150, 7, "Nyquist Plot", "Shows the magnitude and phase response of the filter from 20Hz to 20kHz on the complex plane.");
+        createHelpButton(755, 385, 5, "Pole-Zero Plot", "Shows the poles (x) and zeros (o) of the filter. Poles are shown in positions where the transfer function is infinite (i.e. the roots of the denominator). Zeros are shown in the positions where it is zero (i.e. the roots of the numerator). Drag them to adjust the filter response.");
+        createHelpButton(260, 387, 6, "Filter Generator", "Generates a simple 2nd order filter based on the parameters given. The frequency field is the cutoff or central frequency, Q represents the \"resonance\"");
+    }
+
+    void createHelpButton(int x, int y, int id, const std::string& helpTitle, const std::string& helpText) {
+        HelpButton* button = new HelpButton(this, helpText, helpTitle);
+        button->setAbsolutePos(x, y);
+        button->setSize(14, 14);
+        button->setCallback(this);
+        fHelpButtons.emplace_back(std::make_unique<HelpButton>(this, helpText, helpTitle));
+    }
  
  protected:
 
@@ -1354,6 +1516,65 @@ class FildesUI : public UI,
         if (fGainDBInput->isVisible()) {
             cairo_move_to(cr, 10, 540);
             cairo_show_text(cr, "Gain (dB):");
+        }
+    }
+
+    void drawHelpBox(cairo_t* cr) {
+        // Draw the box
+        cairo_set_source_rgb(cr, 0.95, 0.95, 0.95);
+        cairo_rectangle(cr, fHelpBox.getX(), fHelpBox.getY(), 
+                        fHelpBox.getWidth(), fHelpBox.getHeight());
+        cairo_fill_preserve(cr);
+        
+        // Draw the border
+        cairo_set_source_rgb(cr, 0.3, 0.3, 0.7);
+        cairo_set_line_width(cr, 2.0);
+        cairo_stroke(cr);
+        
+        // Draw title
+        cairo_set_source_rgb(cr, 0.2, 0.2, 0.6);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 16);
+        cairo_move_to(cr, fHelpBox.getX() + 10, fHelpBox.getY() + 20);
+        cairo_show_text(cr, fCurrentHelpTitle.c_str());
+        
+        // Draw help text with word wrapping
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 12);
+        
+        // Simple word wrap for the help text
+        int x = fHelpBox.getX() + 10;
+        int y = fHelpBox.getY() + 40;
+        int maxWidth = fHelpBox.getWidth() - 20;
+        
+        std::string text = fCurrentHelpText;
+        std::string currentLine;
+        
+        std::istringstream iss(text);
+        std::string word;
+        
+        while (iss >> word) {
+            cairo_text_extents_t extents;
+            std::string testLine = currentLine.empty() ? word : currentLine + " " + word;
+            cairo_text_extents(cr, testLine.c_str(), &extents);
+            
+            if (extents.width > maxWidth && !currentLine.empty()) {
+                // Line would be too long, print current line and start a new one
+                cairo_move_to(cr, x, y);
+                cairo_show_text(cr, currentLine.c_str());
+                y += 20;  // Line height
+                currentLine = word;
+            } else {
+                // Add word to current line
+                currentLine = testLine;
+            }
+        }
+        
+        // Print the last line
+        if (!currentLine.empty()) {
+            cairo_move_to(cr, x, y);
+            cairo_show_text(cr, currentLine.c_str());
         }
     }
 
@@ -1401,6 +1622,7 @@ class FildesUI : public UI,
          drawNyquistPlot(cr);
          drawPoleZeroPlot(cr);
         drawFilterParameterLabels(cr);
+        drawHelpBox(cr);
      }
 
      void drawNyquistPlot(cairo_t* cr)
@@ -1724,6 +1946,26 @@ class FildesUI : public UI,
          cairo_set_font_size(cr, 10);
          cairo_move_to(cr, x + 10, y + size - 10);
          cairo_show_text(cr, "Drag poles (x) and zeros (o) to modify filter");
+
+         uint32_t sample_rate = getSampleRate();
+        double nyquist_freq = sample_rate / 2.0;
+        double quarter_freq = nyquist_freq / 2.0;
+
+        // Format frequency values
+        char labelDC[32], labelNyquist[32], labelQuarter[32];
+        snprintf(labelDC, sizeof(labelDC), "0 Hz");
+        snprintf(labelNyquist, sizeof(labelNyquist), "%.2f kHz", nyquist_freq / 1000.0);
+        snprintf(labelQuarter, sizeof(labelQuarter), "%.2f kHz", quarter_freq / 1000.0);
+
+        cairo_move_to(cr, 512, centerY - 5);
+        cairo_show_text(cr, labelNyquist);
+
+        cairo_move_to(cr, 715, centerY - 5);
+        cairo_show_text(cr, labelDC);
+
+        cairo_move_to(cr, centerX + 5, 407);
+        cairo_show_text(cr, labelQuarter);
+
      }
  
      void drawGrid(cairo_t* cr, int x, int y, int width, int height)
@@ -2105,7 +2347,6 @@ class FildesUI : public UI,
          return -1;
      }
  
-     // Mouse event handlers for dragging poles/zeros
      bool onMouse(const MouseEvent& ev) override {
          if (isPoleZeroAreaClick(ev.pos.getX(), ev.pos.getY())) {
              if (ev.button == 1) { // Left button
@@ -2138,11 +2379,15 @@ class FildesUI : public UI,
                  }
              }
          }
+        fCurrentHelpTitle = "Fildes";
+        fCurrentHelpText = "Use the transfer function numerator/denominator text boxes, the pole/zero plot (dragging poles or zeros) or the filter generator to shape the filter. As you make changes, you will hear it, see its trans. func. coefficients, see its magnitude and phase response and pole/zero positions.";
+
          
          return UI::onMouse(ev);
      }
     
      bool onMotion(const MotionEvent& ev) override {
+
          if (fIsDragging && fDraggedIndex >= 0) {
              // Handle dragging
              updateCoefficientsFromDrag(ev.pos.getX(), ev.pos.getY());
@@ -2211,7 +2456,12 @@ class FildesUI : public UI,
          }
      }
 
-     // Implement CustomButton::Callback
+    void buttonClicked(HelpButton* button) {
+        fCurrentHelpText = button->getHelpText();
+        fCurrentHelpTitle = button->getHelpTitle();
+        repaint();
+    }
+
      void buttonClicked(CustomButton* button)
     {
         if (button == fGenerateButton.get()) {
@@ -2225,7 +2475,7 @@ class FildesUI : public UI,
             }
             fGenerateButton->toggleActive();
             repaint();
-        } else if (button == fToLimitButton.get()) {
+        } else if (button == fToLimitButton.get() && fMaxA != 99999999999) {
             fPush = !fPush;
             fToLimitButton->toggleActive();
             fVisualizer.forceUpdate();
@@ -2249,6 +2499,13 @@ class FildesUI : public UI,
     }
 
     void setMaxA(std::string maxAStr) override {
+        if (maxAStr == "") {
+            fMaxA = 99999999999;
+            fToLimitButton->setInactive();
+            fPush = false;
+            repaint();
+            return;
+        }
         double maxA = 1.0;
 
         try {
