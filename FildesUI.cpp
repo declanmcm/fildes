@@ -38,6 +38,8 @@ namespace std {
  #include <cmath>
  #include <thread>
  #include <chrono>
+ #include <atomic>
+#include <mutex>
  #include <future>
  #include <functional>
  #include "Eigen/Eigen"
@@ -179,13 +181,13 @@ namespace std {
             std::vector<double> denominator = {1.0, a1 / a0, a2 / a0};
             
             // Debug output
-            std::cout << "Generated RBJ filter coefficients:" << std::endl;
-            std::cout << "Numerator: ";
-            for (double c : numerator) std::cout << c << " ";
-            std::cout << std::endl;
-            std::cout << "Denominator: ";
-            for (double c : denominator) std::cout << c << " ";
-            std::cout << std::endl;
+            // std::cout << "Generated RBJ filter coefficients:" << std::endl;
+            // std::cout << "Numerator: ";
+            // for (double c : numerator) std::cout << c << " ";
+            // std::cout << std::endl;
+            // std::cout << "Denominator: ";
+            // for (double c : denominator) std::cout << c << " ";
+            // std::cout << std::endl;
             
             return std::make_pair(numerator, denominator);
         }
@@ -754,11 +756,11 @@ class TransferFunctionVisualizer {
          if (findZeroFlag) findZeros();
  
          // Debug output
-         std::cout << "Numerator set to: ";
-         for (double c : mNumerator) {
-             std::cout << c << " ";
-         }
-         std::cout << std::endl;
+        //  std::cout << "Numerator set to: ";
+        //  for (double c : mNumerator) {
+        //      std::cout << c << " ";
+        //  }
+        //  std::cout << std::endl;
      }
 
      void forceUpdate() {
@@ -771,11 +773,11 @@ class TransferFunctionVisualizer {
          findPoles();
  
          // Debug output
-         std::cout << "Denominator set to: ";
-         for (double c : mDenominator) {
-             std::cout << c << " ";
-         }
-         std::cout << std::endl;
+        //  std::cout << "Denominator set to: ";
+        //  for (double c : mDenominator) {
+        //      std::cout << c << " ";
+        //  }
+        //  std::cout << std::endl;
      }
  
      void setSampleRate(double sampleRate) {
@@ -812,7 +814,7 @@ class TransferFunctionVisualizer {
          double scaleFactor = 0.0;
 
 
-         std::cout << "MaxA: " << maxA << std::endl;
+        //  std::cout << "MaxA: " << maxA << std::endl;
          
          for (size_t i = 0; i < numFreqs; ++i) {
              double frequency = mFrequencies[i];
@@ -848,7 +850,7 @@ class TransferFunctionVisualizer {
              mPhases[i] = std::arg(response);
          }
 
-         std::cout << "Scale factor: " << scaleFactor << std::endl;
+        //  std::cout << "Scale factor: " << scaleFactor << std::endl;
          
          mNeedsUpdate = false;
         if (scaleFactor != 0)
@@ -926,7 +928,7 @@ class TransferFunctionVisualizer {
              A(i, i - 1) = 1.0;
          }
  
-         std::cout << "matrix:" << A << std::endl;
+        //  std::cout << "matrix:" << A << std::endl;
          
          // Compute eigenvalues (roots)
          Eigen::EigenSolver<Eigen::MatrixXd> es(A);
@@ -981,11 +983,11 @@ class TransferFunctionVisualizer {
          }
  
          // Debug output
-         std::cout << "Conjugate Indices: ";
-         for (int idx : conjugateIndices) {
-         std::cout << idx << " ";
-         }
-         std::cout << std::endl;
+        //  std::cout << "Conjugate Indices: ";
+        //  for (int idx : conjugateIndices) {
+        //  std::cout << idx << " ";
+        //  }
+        //  std::cout << std::endl;
      }
  
      // Update a pole or zero based on dragging
@@ -1008,7 +1010,7 @@ class TransferFunctionVisualizer {
              roots[conjugateIndex] = std::complex<double>(newValue.real(), -newValue.imag());
              
              // Debug output
-             std::cout << "Updated conjugate at index " << conjugateIndex << std::endl;
+            //  std::cout << "Updated conjugate at index " << conjugateIndex << std::endl;
          } else if (std::abs(newValue.imag()) > 1e-10) {
              // This root has a significant imaginary part, but no conjugate is assigned
              // Try to find a real root to convert to a conjugate, or the closest root
@@ -1019,7 +1021,6 @@ class TransferFunctionVisualizer {
                  if (i != index && conjugateIndices[i] == -1) {
                      double distance = std::abs(roots[i] - std::complex<double>(newValue.real(), -newValue.imag()));
                      if (distance < minDistance) {
-                        std::cout << "HEY FUCK YOU" << distance << std::endl;
                          minDistance = distance;
                          newConjugateIndex = i;
                      }
@@ -1030,7 +1031,6 @@ class TransferFunctionVisualizer {
                 for (size_t i = 0; i < roots.size(); ++i) {
                     if (i != index && conjugateIndices[i] == -1) {
                         if (std::abs(roots[i].imag()) < 1e-10) {
-                            std::cout << "frick" << std::endl;
                             newConjugateIndex = i;
                             break;
                         }
@@ -1046,30 +1046,25 @@ class TransferFunctionVisualizer {
                  conjugateIndices[index] = newConjugateIndex;
                  conjugateIndices[newConjugateIndex] = index;
                  
-                 std::cout << "Created new conjugate pair: " << index << " <-> " << newConjugateIndex << std::endl;
+                //  std::cout << "Created new conjugate pair: " << index << " <-> " << newConjugateIndex << std::endl;
              } else {
                  // Couldn't find a suitable conjugate, force this to be real
                  roots[index] = std::complex<double>(newValue.real(), 0.0);
                  conjugateIndices[index] = -1;
                  
-                 std::cout << "Forced root to be real - no conjugate available" << std::endl;
+                //  std::cout << "Forced root to be real - no conjugate available" << std::endl;
              }
          }
  
-         std::cout << "roots: ";
-         for (const auto& coeff : roots) {
-             std::cout << coeff << " ";
-         }
-         std::cout << std::endl;
+        //  std::cout << "roots: ";
+        //  for (const auto& coeff : roots) {
+        //      std::cout << coeff << " ";
+        //  }
+        //  std::cout << std::endl;
          
          // Immediately update the coefficients
          if (isPole) {
              std::vector<double> newDenominator = rootsToCoeffs(mPoles);
-             std::cout << "new den: ";
-             for (const auto& coeff : newDenominator) {
-                 std::cout << coeff << " ";
-             }
-             std::cout << std::endl;
              
              // Normalize denominator so that z^0 term is 1.0
              if (!newDenominator.empty() && std::abs(newDenominator[0]) > 1e-10) {
@@ -1082,11 +1077,6 @@ class TransferFunctionVisualizer {
              mDenominator = newDenominator;
          } else {
              mNumerator = rootsToCoeffs(mZeros);
-             std::cout << "new num: ";
-             for (const auto& coeff : mNumerator) {
-                 std::cout << coeff << " ";
-             }
-             std::cout << std::endl;
          }
          
          // Mark for response update
@@ -1129,11 +1119,11 @@ class TransferFunctionVisualizer {
                  realCoeffs[i] = coeffs[i].real();
              }
              
-             // Print warning for non-negligible imaginary parts
-             if (std::abs(coeffs[i].imag()) > 1e-8) {
-                 std::cout << "Warning: Significant imaginary component in coefficient: " 
-                         << coeffs[i].imag() << std::endl;
-             }
+            // Print warning for non-negligible imaginary parts
+            //  if (std::abs(coeffs[i].imag()) > 1e-8) {
+            //      std::cout << "Warning: Significant imaginary component in coefficient: " 
+            //              << coeffs[i].imag() << std::endl;
+            //  }
          }
  
  
@@ -1322,14 +1312,20 @@ class FildesUI : public UI,
      bool fCoeffToBeSent = false;
      bool fSendScheduled = false;
      bool fPush = false;
+    std::atomic<bool> fUpdatePending;
+    std::string fPendingTopTF;
+    std::string fPendingBottomTF;
+    std::chrono::time_point<std::chrono::steady_clock> fLastUpdateTime;
+    std::mutex fUpdateMutex;
+    const int fUpdateThrottleMs = 50; // Minimum ms between updates
  
  public:
      FildesUI()
      {
          freopen("output.txt","w",stdout);
-         std::cout << "start\n" << std::flush;
+        //  std::cout << "start\n" << std::flush;
 
-         freopen("nums.txt", "w", stderr);
+        //  freopen("nums.txt", "w", stderr);
          
          // Initialize with default filter coefficients
          parseCoefficients("1", fNumerator);
@@ -1462,7 +1458,22 @@ class FildesUI : public UI,
         
         // Initialize help buttons
         createHelpButtons();
+
+        fUpdatePending = false;
+        fLastUpdateTime = std::chrono::steady_clock::now();
+        
+        // Start the update thread
+        startUpdateThread();
      }
+
+     ~FildesUI() 
+    {
+        // Signal the update thread to stop
+        fUpdateThreadRunning = false;
+        if (fUpdateThread.joinable()) {
+            fUpdateThread.join();
+        }
+    }
 
      void createHelpButtons() {
         // Create help buttons for major UI sections
@@ -1770,7 +1781,7 @@ class FildesUI : public UI,
      {
          // Calculate the response if needed
          double factor = fVisualizer.calculateResponse(fMaxA, fPush);
-         std::cout << "factor: " << factor << std::endl;
+        //  std::cout << "factor: " << factor << std::endl;
          if (factor != 0.0) {
             std::vector<double> num = fVisualizer.getNumerator();
             std::vector<double> newNum;
@@ -2110,11 +2121,11 @@ class FildesUI : public UI,
          }
          
          // Debug: print the parsed coefficients
-         std::cout << "Parsed coefficients (isDenominator=" << isDenominator << "): ";
-         for (double c : coeffs) {
-             std::cout << c << " ";
-         }
-         std::cout << std::endl;
+        //  std::cout << "Parsed coefficients (isDenominator=" << isDenominator << "): ";
+        //  for (double c : coeffs) {
+            //  std::cout << c << " ";
+        //  }
+        //  std::cout << std::endl;
      }
  
      // Format coefficients to string for display
@@ -2272,7 +2283,7 @@ class FildesUI : public UI,
          std::complex<double> newValue = screenToComplex(x, y);
          
          // Debug output
-         std::cout << "Drag to: (" << newValue.real() << ", " << newValue.imag() << ")" << std::endl;
+        //  std::cout << "Drag to: (" << newValue.real() << ", " << newValue.imag() << ")" << std::endl;
          
          // Update pole or zero using visualizer's method which handles conjugate pairs
          fVisualizer.updatePoleZero(fDraggingPole, fDraggedIndex, newValue);
@@ -2290,7 +2301,7 @@ class FildesUI : public UI,
          std::string denStr = formatCoefficients(den, true);
          
          // Debugging output for coefficient changes
-         std::cout << "Updating text fields - Num: " << numStr << " Den: " << denStr << std::endl;
+        //  std::cout << "Updating text fields - Num: " << numStr << " Den: " << denStr << std::endl;
          
          // Directly update the text of EditableText widgets
          if (fCoeffT != nullptr) {
@@ -2307,6 +2318,9 @@ class FildesUI : public UI,
          
          // Force repaint to ensure UI updates
          repaint();
+
+
+        // scheduleUpdate(numStr, denStr);
 
          fCoeffToBeSent = true;
 
@@ -2366,15 +2380,15 @@ class FildesUI : public UI,
                          fDragStartX = ev.pos.getX();
                          fDragStartY = ev.pos.getY();
                          
-                         std::cout << "Drag START: " << (isPole ? "POLE" : "ZERO") 
-                                   << " index " << index << std::endl;
+                        //  std::cout << "Drag START: " << (isPole ? "POLE" : "ZERO") 
+                                //    << " index " << index << std::endl;
                          
                          return true;
                      }
                  } else {
                      // Mouse up
                      if (fIsDragging) {
-                         std::cout << "Drag END" << std::endl;
+                        //  std::cout << "Drag END" << std::endl;
                          fIsDragging = false;
                          fDraggedIndex = -1;
                          return true;
@@ -2443,18 +2457,20 @@ class FildesUI : public UI,
      void setTF(std::string newText) override {
         fUpdatedFromTF = true;
         fUpdatedFromPZP = fUpdatedFromFG = false;
-         std::cout << "setTF\n" << std::flush;
+        //  std::cout << "setTF\n" << std::flush;
          if (newText[0] == 'T') {
              const char* coeffStr = &newText[1];
              parseCoefficients(coeffStr, fNumerator, false);
              updateVisualizationFromCoefficients();
              setState("topTF", &newText[1]);
+            // scheduleUpdate(coeffStr, "");
          }
          else if (newText[0] == 'B') {
              const char* coeffStr = &newText[1];
              parseCoefficients(coeffStr, fDenominator, true);
              updateVisualizationFromCoefficients();
-             setState("bottomTF", &newText[1]);
+            //  setState("bottomTF", &newText[1]);
+            //  scheduleUpdate("", coeffStr);
          }
      }
 
@@ -2513,12 +2529,12 @@ class FildesUI : public UI,
         try {
             maxA = std::stod(maxAStr);
         } catch (const std::exception& e) {
-            std::cout << "Error parsing max amplitude: " << e.what() << std::endl;
+            // std::cout << "Error parsing max amplitude: " << e.what() << std::endl;
             return;
         }
 
         fMaxA = pow(10.0, maxA / 20.0);
-        std::cout << "fMaxA: " << fMaxA << std::endl;
+        // std::cout << "fMaxA: " << fMaxA << std::endl;
         updateVisualizationFromCoefficients();
     }
 
@@ -2530,12 +2546,12 @@ class FildesUI : public UI,
         try {
             gain = std::stod(gainStr);
         } catch (const std::exception& e) {
-            std::cout << "Error parsing gain: " << e.what() << std::endl;
+            // std::cout << "Error parsing gain: " << e.what() << std::endl;
             fGainInput->setText(""); // Reset to default gain
             return;
         }
 
-        std::cout << "Gain:" << gain << std::endl;
+        // std::cout << "Gain:" << gain << std::endl;
         
         double absGain = pow(10.0, gain / 20.0);
         // Apply the gain by multiplying all numerator coefficients
@@ -2552,6 +2568,8 @@ class FildesUI : public UI,
         
         // Update the plugin state
         setState("topTF", numStr.c_str());
+
+        // scheduleUpdate(numStr, "");
         
         // Reset gain to 1.0 after applying
         fGainInput->setText("");
@@ -2589,6 +2607,77 @@ class FildesUI : public UI,
          setParameterValue(kParameterButton, down ? 1.f : 0.f);
      }
  private:
+
+    std::thread fUpdateThread;
+    std::atomic<bool> fUpdateThreadRunning;
+    
+    // Start a background thread to handle parameter updates
+    void startUpdateThread() 
+    {
+        fUpdateThreadRunning = true;
+        fUpdateThread = std::thread([this]() {
+            while (fUpdateThreadRunning) {
+                processPendingUpdates();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
+    }
+    
+    // Process any pending updates in the background thread
+    void processPendingUpdates() 
+    {
+        if (!fUpdatePending) {
+            return;
+        }
+        
+        // Check if enough time has passed since the last update
+        auto now = std::chrono::steady_clock::now();
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - fLastUpdateTime).count();
+            
+        if (elapsedMs < fUpdateThrottleMs) {
+            return;
+        }
+        
+        // Process updates
+        std::string topTF, bottomTF;
+        
+        {
+            std::lock_guard<std::mutex> lock(fUpdateMutex);
+            topTF = fPendingTopTF;
+            bottomTF = fPendingBottomTF;
+            fPendingTopTF.clear();
+            fPendingBottomTF.clear();
+            fUpdatePending = false;
+        }
+        
+        // Send updates to the DSP thread
+        if (!topTF.empty()) {
+            setState("topTF", topTF.c_str());
+        }
+        
+        if (!bottomTF.empty()) {
+            setState("bottomTF", bottomTF.c_str());
+        }
+        
+        fLastUpdateTime = now;
+    }
+    
+    // Schedule an update to be sent to the DSP thread
+    void scheduleUpdate(const std::string& topTF, const std::string& bottomTF) 
+    {
+        std::lock_guard<std::mutex> lock(fUpdateMutex);
+        
+        if (!topTF.empty()) {
+            fPendingTopTF = topTF;
+        }
+        
+        if (!bottomTF.empty()) {
+            fPendingBottomTF = bottomTF;
+        }
+        
+        fUpdatePending = true;
+    }
 
   // Update visibility of parameters based on filter type
     void updateFilterParametersVisibility()
@@ -2683,8 +2772,11 @@ class FildesUI : public UI,
         // Update plugin state
         setState("topTF", numStr.c_str());
         setState("bottomTF", denStr.c_str());
+
+
+        // scheduleUpdate(numStr, denStr);
         
-        std::cout << "RBJ filter generated successfully!" << std::endl;
+        // std::cout << "RBJ filter generated successfully!" << std::endl;
     }
  };
  

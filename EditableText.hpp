@@ -3,7 +3,11 @@
 #include "Cairo.hpp"
 #include <string>
 #include <iostream>
+#include <chrono>
 #include <string>
+#include <thread>
+ #include <atomic>
+#include <mutex>
 
 START_NAMESPACE_DGL
 
@@ -99,6 +103,10 @@ class EditableText : public CairoSubWidget,
     int fCursorX, fCursorY;
     bool fIsLayoutValid;
     cairo_t* fCr;
+    // Debouncing for text changes
+    std::atomic<bool> fTextChanged;
+    std::chrono::time_point<std::chrono::steady_clock> fLastTextChangeTime;
+    const int fTextChangeThrottleMs = 50; // Minimum ms between text change callbacks
 
 public:
     class Callback
@@ -128,7 +136,10 @@ public:
             fMinus[i] = false;
         }
         fIsLayoutValid = false;
+        fLastTextChangeTime = std::chrono::steady_clock::now();
         ButtonEventHandler::setCallback(this);
+        
+        startTextChangeThread();
     }
 
     explicit EditableText(TopLevelWidget* const parent, std::string type)
@@ -145,7 +156,20 @@ public:
             fPoint[i] = false;
             fMinus[i] = false;
         }
+        fLastTextChangeTime = std::chrono::steady_clock::now();
         ButtonEventHandler::setCallback(this);
+        
+        // Start the text change handler thread
+        startTextChangeThread();
+    }
+
+    ~EditableText()
+    {
+        // Signal the thread to stop
+        fTextChangeThreadRunning = false;
+        if (fTextChangeThread.joinable()) {
+            fTextChangeThread.join();
+        }
     }
 
     void setText(const std::string& text)
@@ -192,14 +216,6 @@ protected:
         cairo_rectangle(cr, 0, 0, getWidth(), getHeight());
         cairo_stroke(cr);
 
-        // Draw text
-        // cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-        // cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-        // cairo_set_font_size(cr, 14);
-
-        // cairo_move_to(cr, 5, getHeight() - 10); // Adjust text position
-        // cairo_show_text(cr, fText.c_str());
-
         drawText(cr, 5, getHeight() - 10);
     }
 
@@ -245,7 +261,6 @@ protected:
     int getCharIndexAtPosition(double x, double y) {
         // Find which character boundary the click is closest to
         for (size_t i = 0; i < charXPositions.size() - 1; i++) {
-            std::cout << charXPositions[i] << std::endl;
             if (x >= charXPositions[i] && x < charXPositions[i+1]) {
                 // Check if click is closer to the left or right character boundary
                 double leftDist = x - charXPositions[i];
@@ -286,78 +301,17 @@ protected:
             fCallback->focus(this);
     }
 
-    // bool onKeyboard(const KeyboardEvent& ev) override
-    // {
-    //     if (this->isFocused() && ev.press)
-    //     {
-    //         if (fType == "G" || fType == "M") {
-    //             if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1])) {
-    //                 if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
-    //                 if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
-    //                 fText += ev.key;
-    //                 repaint();
-    //             }
-    //             else if (ev.key == 8 && !fText.empty()) // Handle backspace
-    //             {
-    //                 if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
-    //                 if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
-    //                 fText.pop_back();
-    //                 repaint();
-    //             }
-    //             else if (ev.key == 13 && fType == "G") // Use enter key to apply gain
-    //             {
-    //                 this->setFocused(false);
-    //                 if (fCallback)
-    //                     fCallback->setGain(fText);
-    //                 fText = "";
-    //                 fPoint[fCoeffCount - 1] = false;
-    //                 fMinus[fCoeffCount - 1] = false;
-    //                 repaint();
-    //             }
-    //             if (fType == "M" && fCallback) {
-    //                 fCallback->setMaxA(fText);
-    //             }
-    //         } else {
-    //             if ((ev.key >= '0' && ev.key <= '9') || (ev.key == '.' && !fPoint[fCoeffCount - 1]) || (ev.key == '-' && !fMinus[fCoeffCount - 1] && (!(std::strcmp(fText.c_str(), "")) || fText[fText.length() - 1] == ',')) || (ev.key == ',')) // Allow digits and decimal point
-    //             {
-    //                 if (ev.key == '.') fPoint[fCoeffCount - 1] = true;
-    //                 if (ev.key == ',') {
-    //                     fMinus[++fCoeffCount - 1] = false;
-    //                 }
-    //                 if (ev.key == '-') fMinus[fCoeffCount - 1] = true;
-    //                 fText += ev.key;
-    //                 repaint();
-    //             }
-    //             else if (ev.key == 8 && !fText.empty()) // Handle backspace
-    //             {
-    //                 if (fText[fText.length() - 1] == '.') fPoint[fCoeffCount - 1] = false;
-    //                 if (fText[fText.length() - 1] == ',') fCoeffCount--;
-    //                 if (fText[fText.length() - 1] == '-') fMinus[fCoeffCount - 1] = false;
-    //                 fText.pop_back();
-    //                 repaint();
-    //             }
-    //             else if (ev.key == 13) // Enter key
-    //             {
-    //                 this->setFocused(false); // Lose focus on Enter
-    //                 repaint();
-    //             }
-    //             if (fCallback) {
-    //                 if (fType != " ")
-    //                     fCallback->setTF(fType + fText);
-    //                 else
-    //                     fCallback->generateIfTracking();
-    //             }
-    //         }
-    //     }
-    //     return KeyboardEventHandler::keyboardEvent(ev);
-    // }
-
     void insertChar(char c) {
-        fText = fText.substr(0, cursorPosition) + c + fText.substr(cursorPosition, fText.length() - (cursorPosition - 1));
+        fText = fText.substr(0, cursorPosition) + c + fText.substr(cursorPosition);
         cursorPosition++;
+        
+        // Schedule text change
+        scheduleTextChange(fText);
     }
 
     void removeChar(void) {
+        if (cursorPosition <= 0 || fText.empty()) return;
+        
         if (fText[cursorPosition - 1] == ',') {
             std::string toSet = fText.substr(0, cursorPosition - 1);
             bool leftHasPoint = false;
@@ -369,20 +323,20 @@ protected:
                 }
             }
             i = cursorPosition;
-            std::cout << "leftHasPoint: " << leftHasPoint << std::endl;
             while (i < fText.length() && fText[i] != ',') {
                 if (((leftHasPoint && fText[i] != '.') || !leftHasPoint) && fText[i] != '-') {
-                    if (fText[i] == '.')
-                        std::cout << fText[i] << std::endl;
                     toSet += fText[i];
                 }
                 i++;
             }
-            std::cout << "done" << std::endl;
-            fText = toSet + fText.substr(i, fText.length() - (i - 1));
-        } else
-            fText = fText.substr(0, cursorPosition - 1) + fText.substr(cursorPosition, fText.length() - (cursorPosition - 1));
+            fText = toSet + fText.substr(i, fText.length() - i);
+        } else {
+            fText = fText.substr(0, cursorPosition - 1) + fText.substr(cursorPosition);
+        }
         cursorPosition--;
+        
+        // Schedule text change
+        scheduleTextChange(fText);
     }
 
     void insertPoint(void) {
@@ -413,68 +367,67 @@ protected:
     {
         if (this->isFocused() && ev.press)
         {
-            if (fType == "G" || fType == "M" || fType == " ") {
-                if (ev.key >= '0' && ev.key <= '9')
-                    insertChar(ev.key);
-                else if (ev.key == '.')
-                    insertPoint();
-                else if (ev.key == '-') {
-                    if ((cursorPosition == fText.length() || (fText[cursorPosition] != '-')) && (cursorPosition == 0 || fText[cursorPosition - 1] == ','))
-                        insertChar(ev.key);
-                }
-                else if (ev.key == 8 && cursorPosition != 0)
-                    removeChar();
-                else if (ev.key == 127 && cursorPosition != fText.length()) {
-                    cursorPosition++;
-                    removeChar();
-                }
-                else if (ev.key == 57397 && cursorPosition != 0)
+            if (ev.key == 57399 || ev.key == 57397) {
+                if (ev.key == 57397 && cursorPosition != 0)
                     cursorPosition--;
                 else if (ev.key == 57399 && cursorPosition != fText.length())
                     cursorPosition++;
-                else if (ev.key == 13 && fType == "G") // Use enter key to apply gain
-                {
-                    this->setFocused(false);
-                    if (fCallback)
-                        fCallback->setGain(fText);
-                    fText = "";
-                    fPoint[fCoeffCount - 1] = false;
-                    fMinus[fCoeffCount - 1] = false;
-                }
-                if (fType == "M" && fCallback) {
-                    fCallback->setMaxA(fText);
-                }
-                if (fType == " " && fCallback) {
-                    fCallback->generateIfTracking();
-                }
             } else {
-                if (ev.key >= '0' && ev.key <= '9')
-                    insertChar(ev.key);
-                else if (ev.key == ',')
-                    insertChar(ev.key);
-                else if (ev.key == 8 && cursorPosition != 0)
-                    removeChar();
-                else if (ev.key == 127 && cursorPosition != fText.length()) {
-                    cursorPosition++;
-                    removeChar();
-                }
-                else if (ev.key == '-') {
-                    if ((cursorPosition == fText.length() || (fText[cursorPosition] != '-')) && (cursorPosition == 0 || fText[cursorPosition - 1] == ','))
+                if (fType == "G" || fType == "M" || fType == " ") {
+                    if (ev.key >= '0' && ev.key <= '9')
                         insertChar(ev.key);
+                    else if (ev.key == '.')
+                        insertPoint();
+                    else if (ev.key == '-') {
+                        if ((cursorPosition == fText.length() || (fText[cursorPosition] != '-')) && (cursorPosition == 0 || fText[cursorPosition - 1] == ','))
+                            insertChar(ev.key);
+                    }
+                    else if (ev.key == 8 && cursorPosition != 0)
+                        removeChar();
+                    else if (ev.key == 127 && cursorPosition != fText.length()) {
+                        cursorPosition++;
+                        removeChar();
+                    }
+                    else if (ev.key == 13 && fType == "G")
+                    {
+                        this->setFocused(false);
+                        if (fCallback)
+                            fCallback->setGain(fText);
+                        fText = "";
+                        fPoint[fCoeffCount - 1] = false;
+                        fMinus[fCoeffCount - 1] = false;
+                    }
+                    // if (fType == "M" && fCallback) {
+                    //     fCallback->setMaxA(fText);
+                    // }
+                    // if (fType == " " && fCallback) {
+                    //     fCallback->generateIfTracking();
+                    // }
+                } else {
+                    if (ev.key >= '0' && ev.key <= '9')
+                        insertChar(ev.key);
+                    else if (ev.key == ',')
+                        insertChar(ev.key);
+                    else if (ev.key == 8 && cursorPosition != 0)
+                        removeChar();
+                    else if (ev.key == 127 && cursorPosition != fText.length()) {
+                        cursorPosition++;
+                        removeChar();
+                    }
+                    else if (ev.key == '-') {
+                        if ((cursorPosition == fText.length() || (fText[cursorPosition] != '-')) && (cursorPosition == 0 || fText[cursorPosition - 1] == ','))
+                            insertChar(ev.key);
+                    }
+                    else if (ev.key == '.')
+                        insertPoint();
+                    else if (ev.key == 13)
+                        this->setFocused(false);
+                    if (fCallback)
+                        fCallback->setTF(fType + fText);
                 }
-                else if (ev.key == '.')
-                    insertPoint();
-                else if (ev.key == 57397 && cursorPosition != 0)
-                    cursorPosition--;
-                else if (ev.key == 57399 && cursorPosition != fText.length())
-                    cursorPosition++;
-                else if (ev.key == 13)
-                    this->setFocused(false);
-                if (fCallback)
-                    fCallback->setTF(fType + fText);
             }
+            repaint();
         }
-        repaint();
         return KeyboardEventHandler::keyboardEvent(ev);
     }
 
@@ -486,6 +439,60 @@ private:
     int fCoeffCount;
     std::string fType;
     double textX, textY;
+    std::thread fTextChangeThread;
+    std::atomic<bool> fTextChangeThreadRunning;
+    std::string fPendingTextChange;
+    std::mutex fTextChangeMutex;
+
+    void startTextChangeThread() 
+    {
+        fTextChangeThreadRunning = true;
+        fTextChangeThread = std::thread([this]() {
+            while (fTextChangeThreadRunning) {
+                // Check if there's a pending text change
+                if (fTextChanged) {
+                    // Check if enough time has passed since the last update
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - fLastTextChangeTime).count();
+                        
+                    if (elapsedMs >= fTextChangeThrottleMs) {
+                        // Get the pending text change
+                        std::string textChange;
+                        {
+                            std::lock_guard<std::mutex> lock(fTextChangeMutex);
+                            textChange = fPendingTextChange;
+                            fPendingTextChange.clear();
+                            fTextChanged = false;
+                        }
+                        
+                        // Send the change to the callback
+                        if (fCallback) {
+                            if (fType == "M") {
+                                fCallback->setMaxA(textChange);
+                            } else if (fType == " ") {
+                                fCallback->generateIfTracking();
+                            } else {
+                                fCallback->setTF(fType + textChange);
+                            }
+                        }
+                        
+                        fLastTextChangeTime = now;
+                    }
+                }
+                
+                // Sleep to avoid consuming too much CPU
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
+    }
+
+    void scheduleTextChange(const std::string& text) 
+    {
+        std::lock_guard<std::mutex> lock(fTextChangeMutex);
+        fPendingTextChange = text;
+        fTextChanged = true;
+    }
 };
 
 END_NAMESPACE_DGL

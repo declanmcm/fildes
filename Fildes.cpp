@@ -21,6 +21,64 @@
 #include <iostream>
 #include <cstdio>
 #include <bitset>
+#include <atomic>
+#include <mutex>
+
+/**
+ * A lock-free ring buffer for transferring parameter updates from UI to audio thread
+ */
+template<typename T, size_t Size>
+class RingBuffer {
+public:
+    RingBuffer() : writeIndex(0), readIndex(0) {
+        static_assert((Size & (Size - 1)) == 0, "Size must be a power of 2");
+    }
+    
+    bool push(const T& item) {
+        const size_t currentWrite = writeIndex.load(std::memory_order_relaxed);
+        const size_t nextWrite = (currentWrite + 1) & (Size - 1);
+        
+        if (nextWrite == readIndex.load(std::memory_order_acquire)) {
+            return false; // Buffer is full
+        }
+        
+        buffer[currentWrite] = item;
+        writeIndex.store(nextWrite, std::memory_order_release);
+        return true;
+    }
+    
+    bool pop(T& item) {
+        const size_t currentRead = readIndex.load(std::memory_order_relaxed);
+        
+        if (currentRead == writeIndex.load(std::memory_order_acquire)) {
+            return false; // Buffer is empty
+        }
+        
+        item = buffer[currentRead];
+        readIndex.store((currentRead + 1) & (Size - 1), std::memory_order_release);
+        return true;
+    }
+    
+    void clear() {
+        readIndex.store(writeIndex.load(std::memory_order_acquire), std::memory_order_release);
+    }
+    
+private:
+    T buffer[Size];
+    std::atomic<size_t> writeIndex;
+    std::atomic<size_t> readIndex;
+};
+
+struct FilterUpdate {
+    enum Type {
+        TOP_COEFFS,
+        BOTTOM_COEFFS
+    };
+    
+    Type type;
+    double coeffs[100];  // Store the actual coefficient values
+    int numCoeffs;
+};
 
 START_NAMESPACE_DISTRHO
 
@@ -38,6 +96,9 @@ class Fildes : public Plugin
     double alpha;
     int numCoeffsTop, numCoeffsBottom, outi, ini, xz1, xz2, yz1, yz2, fRuni, fPrevChangei, fInterpolIter, fMaxValCount;
     bool fTFChanged;
+
+    RingBuffer<FilterUpdate, 16> parameterQueue;
+    std::mutex paramUpdateMutex;
 
 public:
     Fildes()
@@ -141,6 +202,46 @@ public:
         return 0;
     }
 
+    // // Modified processTFString to queue updates instead of modifying filter params directly
+    // void processTFString(const char* str, bool isTop) {
+    //     FilterUpdate update;
+    //     update.type = isTop ? FilterUpdate::TOP_COEFFS : FilterUpdate::BOTTOM_COEFFS;
+    //     update.numCoeffs = 0;
+        
+    //     // Create a copy of the input string to tokenize
+    //     char inputCopy[1024]; // Ensure this is large enough for your input strings
+    //     strncpy(inputCopy, str, sizeof(inputCopy) - 1);
+    //     inputCopy[sizeof(inputCopy) - 1] = '\0'; // Ensure null-termination
+        
+    //     // Tokenize the string using commas as the delimiter
+    //     size_t index = 0;
+    //     char* token = strtok(inputCopy, ",");
+        
+    //     while (token != NULL && index < 100) {
+    //         // Convert the token to a float, treating empty tokens as 0
+    //         double value = (token[0] == '\0') ? 0.0f : strtof(token, NULL);
+    //         update.coeffs[index] = value;
+            
+    //         // Update the highest non-zero index
+    //         if (value != 0.0f) {
+    //             update.numCoeffs = (int)index;
+    //         }
+            
+    //         // Move to the next token
+    //         token = strtok(NULL, ",");
+    //         ++index;
+    //     }
+        
+    //     // Fill remaining elements with 0
+    //     for (; index < 100; ++index) {
+    //         update.coeffs[index] = 0.0f;
+    //     }
+        
+    //     // Add update to the queue - use mutex to ensure we don't push while queue is being processed
+    //     std::lock_guard<std::mutex> lock(paramUpdateMutex);
+    //     parameterQueue.push(update);
+    // }
+
     void processTFString(const char* str, bool type) {
 
         size_t index = 0;
@@ -189,10 +290,10 @@ public:
         //     fOldBottom[i] = bottomTF[i];
         // }
 
-        for (int i = 0; i < 4; i++) {
-            std::cout << topTF[i] << "\n" << std::flush;
-            std::cout << bottomTF[i] << "\n" << std::flush;
-        }
+        // for (int i = 0; i < 4; i++) {
+        //     std::cout << topTF[i] << "\n" << std::flush;
+        //     std::cout << bottomTF[i] << "\n" << std::flush;
+        // }
 
         fPrevChangei = fRuni;
         fTFChanged = true;
@@ -229,6 +330,8 @@ public:
             return;
         }
 
+        // processParameterQueue();
+
         int found = 0;
         double outputCopy[frames];
 
@@ -247,8 +350,6 @@ public:
 
                     std::memcpy(topTF, fNewTop, sizeof(fNewTop));
                     std::memcpy(bottomTF, fNewBottom, sizeof(fNewBottom));
-                    std::memset(inMem, 0, sizeof(inMem));
-                    std::memset(outMem, 0, sizeof(outMem));
                     fTFChanged = false;
                 }
                 
@@ -292,6 +393,36 @@ public:
                     }
                 }
             }
+        }
+    }
+
+    private:
+    // New method to process parameter updates safely
+    void processParameterQueue() {
+        FilterUpdate update;
+        
+        // Use mutex to prevent UI from pushing while we're processing
+        std::lock_guard<std::mutex> lock(paramUpdateMutex);
+        
+        while (parameterQueue.pop(update)) {
+            // Store old values for interpolation if needed
+            if (update.type == FilterUpdate::TOP_COEFFS) {
+                for (int i = 0; i < 100; i++) {
+                    fOldTop[i] = topTF[i];
+                    fNewTop[i] = update.coeffs[i];
+                }
+                numCoeffsTop = update.numCoeffs;
+            } else {
+                for (int i = 0; i < 100; i++) {
+                    fOldBottom[i] = bottomTF[i];
+                    fNewBottom[i] = update.coeffs[i];
+                }
+                numCoeffsBottom = update.numCoeffs;
+            }
+            
+            // Mark for interpolation
+            fPrevChangei = fRuni;
+            fTFChanged = true;
         }
     }
 
