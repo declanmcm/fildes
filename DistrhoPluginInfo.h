@@ -61,7 +61,7 @@
    The plugin id when exporting in CLAP format, in reverse URI form.
    @note This macro is required when building CLAP plugins
 */
-#define DISTRHO_PLUGIN_CLAP_ID "studio.kx.distrho.examples.cairo-ui"
+#define DISTRHO_PLUGIN_CLAP_ID ""
 
 /**
    Wherever the plugin has a custom %UI.

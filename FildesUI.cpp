@@ -748,10 +748,10 @@ class TransferFunctionVisualizer {
          updateFrequencyPoints();
      }
  
-     void setNumerator(const std::vector<double>& coeffs) {
+     void setNumerator(const std::vector<double>& coeffs, bool findZeroFlag) {
          mNumerator = coeffs;
          mNeedsUpdate = true;
-         findZeros();
+         if (findZeroFlag) findZeros();
  
          // Debug output
          std::cout << "Numerator set to: ";
@@ -1017,19 +1017,25 @@ class TransferFunctionVisualizer {
              
              for (size_t i = 0; i < roots.size(); ++i) {
                  if (i != index && conjugateIndices[i] == -1) {
-                     // Prioritize real roots (imaginary part close to zero)
-                     if (std::abs(roots[i].imag()) < 1e-10) {
-                         newConjugateIndex = i;
-                         break;
-                     }
-                     
-                     // Otherwise find the closest root
                      double distance = std::abs(roots[i] - std::complex<double>(newValue.real(), -newValue.imag()));
                      if (distance < minDistance) {
+                        std::cout << "HEY FUCK YOU" << distance << std::endl;
                          minDistance = distance;
                          newConjugateIndex = i;
                      }
                  }
+             }
+
+             if (newConjugateIndex == -1) {
+                for (size_t i = 0; i < roots.size(); ++i) {
+                    if (i != index && conjugateIndices[i] == -1) {
+                        if (std::abs(roots[i].imag()) < 1e-10) {
+                            std::cout << "frick" << std::endl;
+                            newConjugateIndex = i;
+                            break;
+                        }
+                    }
+                }
              }
              
              // If we found a suitable root, convert it to a conjugate
@@ -1328,7 +1334,7 @@ class FildesUI : public UI,
          // Initialize with default filter coefficients
          parseCoefficients("1", fNumerator);
          parseCoefficients("1", fDenominator);
-         fVisualizer.setNumerator(fNumerator);
+         fVisualizer.setNumerator(fNumerator, true);
          fVisualizer.setDenominator(fDenominator);
          fGeneratorTracking = false;
  
@@ -1342,17 +1348,17 @@ class FildesUI : public UI,
          // Initialize in constructor
          fCoeffT = new EditableText(this, "T");
          fCoeffT->setAbsolutePos(150, 50);
-         fCoeffT->setSize(500, 30);
+         fCoeffT->setSize(615, 30);
          fCoeffT->setCallback(this);
          fCoeffT->setText("1");
  
          fCoeffB = new EditableText(this, "B");
          fCoeffB->setAbsolutePos(170, 100);
-         fCoeffB->setSize(480, 30);
+         fCoeffB->setSize(595, 30);
          fCoeffB->setCallback(this);
 
         fMaxAInput = new EditableText(this, "M");
-        fMaxAInput->setAbsolutePos(750, 50);
+        fMaxAInput->setAbsolutePos(865, 50);
         fMaxAInput->setSize(100, 30);
         fMaxAInput->setCallback(this);
         fMaxAInput->setText("");
@@ -1360,7 +1366,7 @@ class FildesUI : public UI,
 
          // Create gain input field
         fGainInput = new EditableText(this, "G");
-        fGainInput->setAbsolutePos(750, 100);
+        fGainInput->setAbsolutePos(865, 100);
         fGainInput->setSize(100, 30);
         fGainInput->setCallback(this);
         fGainInput->setText("");
@@ -1461,8 +1467,8 @@ class FildesUI : public UI,
      void createHelpButtons() {
         // Create help buttons for major UI sections
         createHelpButton(195, 16, 1, "Transfer Function", "The transfer function is a direct mathematical representation of the filter's nature and implementation. The numerator coefficients are respectively multiplied (or convolved) with the audio inputs, similarly to the denominator coefficients with the audio outputs");
-        createHelpButton(630, 35, 2, "Numerator", "These coefficients correspond to the zeros of the filter.");
-        createHelpButton(630, 85, 3, "Denominator", "These coefficients correspond to the poles of the filter. The first coefficient is always set to 1.");
+        createHelpButton(745, 35, 2, "Numerator", "These coefficients correspond to the zeros of the filter.");
+        createHelpButton(745, 85, 3, "Denominator", "These coefficients correspond to the poles of the filter. The first coefficient is always set to 1.");
         createHelpButton(755, 150, 4, "Frequency Response", "A logarithmic display of the magnitude response of the filter from 20Hz to 20kHz.");
         createHelpButton(980, 150, 7, "Nyquist Plot", "Shows the magnitude and phase response of the filter from 20Hz to 20kHz on the complex plane.");
         createHelpButton(755, 385, 5, "Pole-Zero Plot", "Shows the poles (x) and zeros (o) of the filter. Poles are shown in positions where the transfer function is infinite (i.e. the roots of the denominator). Zeros are shown in the positions where it is zero (i.e. the roots of the numerator). Drag them to adjust the filter response.");
@@ -1591,10 +1597,10 @@ class FildesUI : public UI,
         cairo_move_to(cr, 155, 120);
         cairo_show_text(cr, "1,");
 
-        cairo_move_to(cr, 660, 120);
+        cairo_move_to(cr, 775, 120);
         cairo_show_text(cr, "Apply gain:");
 
-        cairo_move_to(cr, 660, 70);
+        cairo_move_to(cr, 775, 70);
         cairo_show_text(cr, "Gain limit:");
  
         cairo_move_to(cr, 10, 30);
@@ -1773,7 +1779,7 @@ class FildesUI : public UI,
                 newNum.push_back(coeff * factor);
 
             fNumerator = newNum;
-            fVisualizer.setNumerator(fNumerator);
+            fVisualizer.setNumerator(fNumerator, false);
             fVisualizer.calculateResponse(fMaxA, fPush);
 
             std::string numStr = formatCoefficients(fNumerator, false);
@@ -1843,6 +1849,7 @@ class FildesUI : public UI,
          // Draw labels
          drawFrequencyLabels(cr, x, y, width, height);
          drawMagnitudeLabels(cr, x, y, width, height, minDb, maxDb);
+         return;
      }
  
      void drawPoleZeroPlot(cairo_t* cr)
@@ -2160,12 +2167,8 @@ class FildesUI : public UI,
  
      void updateVisualizationFromCoefficients() {
          // Ensure the visualizer has the latest coefficients
-         fVisualizer.setNumerator(fNumerator);
+         fVisualizer.setNumerator(fNumerator, true);
          fVisualizer.setDenominator(fDenominator);
-         
-         // Make sure poles and zeros are calculated
-         fVisualizer.findPoles();
-         fVisualizer.findZeros();
 
          checkStability();
          
@@ -2399,8 +2402,7 @@ class FildesUI : public UI,
          
          return UI::onMotion(ev);
      }
- 
-     // we can use this if/when our resources are scalable, for now they are PNGs
+
      void onResize(const ResizeEvent& ev) override
      {
          UI::onResize(ev);
@@ -2542,10 +2544,10 @@ class FildesUI : public UI,
         }
         
         // Update the visualizer with modified coefficients
-        fVisualizer.setNumerator(fNumerator);
+        fVisualizer.setNumerator(fNumerator, false);
         
         // Format coefficients for display and update the text field
-        std::string numStr = formatCoefficients(fNumerator, false);
+        std::string numStr = formatCoefficients(fNumerator);
         fCoeffT->setText(numStr);
         
         // Update the plugin state
