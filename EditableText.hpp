@@ -51,14 +51,12 @@ struct KeyboardEventHandler::PrivateData {
 
     bool handleKeyboardEvent(const Widget::KeyboardEvent& ev)
     {
-        // Call the user's callback if set.
         if (userCallback != nullptr)
         {
             userCallback->keyPressed(widget, ev);
             return true;
         }
 
-        // By default, let the self handle the event.
         self->stateChanged(ev);
         return false;
     }
@@ -86,8 +84,7 @@ bool KeyboardEventHandler::keyboardEvent(const Widget::KeyboardEvent& ev)
 
 void KeyboardEventHandler::stateChanged(const Widget::KeyboardEvent&)
 {
-    // Default implementation does nothing.
-    // Subclasses can override this to handle state changes.
+
 }
 
 
@@ -103,10 +100,9 @@ class EditableText : public CairoSubWidget,
     int fCursorX, fCursorY;
     bool fIsLayoutValid;
     cairo_t* fCr;
-    // Debouncing for text changes
     std::atomic<bool> fTextChanged;
     std::chrono::time_point<std::chrono::steady_clock> fLastTextChangeTime;
-    const int fTextChangeThrottleMs = 50; // Minimum ms between text change callbacks
+    const int fTextChangeThrottleMs = 50;
 
 public:
     class Callback
@@ -159,13 +155,11 @@ public:
         fLastTextChangeTime = std::chrono::steady_clock::now();
         ButtonEventHandler::setCallback(this);
         
-        // Start the text change handler thread
         startTextChangeThread();
     }
 
     ~EditableText()
     {
-        // Signal the thread to stop
         fTextChangeThreadRunning = false;
         if (fTextChangeThread.joinable()) {
             fTextChangeThread.join();
@@ -202,16 +196,14 @@ protected:
         cairo_t* cr = context.handle;
         fCr = cr;
 
-        // Draw background
         cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
         cairo_rectangle(cr, 0, 0, getWidth(), getHeight());
         cairo_fill(cr);
 
-        // Draw border (highlight if focused)
         if (this->isFocused())
-            cairo_set_source_rgb(cr, 0.0, 0.0, 1.0); // Blue border for focus
+            cairo_set_source_rgb(cr, 0.0, 0.0, 1.0); // blue if focussed
         else
-            cairo_set_source_rgb(cr, 0.0, 0.0, 0.0); // Black border otherwise
+            cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
 
         cairo_rectangle(cr, 0, 0, getWidth(), getHeight());
         cairo_stroke(cr);
@@ -220,13 +212,11 @@ protected:
     }
 
     void drawText(cairo_t* cr, double x, double y) {
-        // Store the beginning position
         charXPositions.clear();
         charXPositions.push_back(x);
 
         fPreviousText = fText;
         
-        // Select font before measuring
         cairo_select_font_face(cr, "monospace", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 14);
         
@@ -234,23 +224,19 @@ protected:
         double currentX = x;
         for (size_t i = 0; i < fText.length(); i++) {
             cairo_text_extents_t extents;
-            // Measure single character
             std::string charStr = fText.substr(i, 1);
             cairo_text_extents(cr, charStr.c_str(), &extents);
             
-            // Draw character
             cairo_move_to(cr, currentX, y);
             cairo_show_text(cr, charStr.c_str());
             
-            // Move to next position and store it
             currentX += extents.x_advance;
             charXPositions.push_back(currentX);
         }
         
-        // Draw cursor if needed
         if (cursorPosition >= 0 && cursorPosition <= fText.length() && this->isFocused()) {
             cairo_set_source_rgb(cr, 0, 0, 0);
-            cairo_move_to(cr, charXPositions[cursorPosition], y - 14); // Adjust height based on font
+            cairo_move_to(cr, charXPositions[cursorPosition], y - 14);
             cairo_line_to(cr, charXPositions[cursorPosition], y + 2);
             cairo_stroke(cr);
         }
@@ -259,17 +245,15 @@ protected:
     }
 
     int getCharIndexAtPosition(double x, double y) {
-        // Find which character boundary the click is closest to
+        // Find which character click is closest to
         for (size_t i = 0; i < charXPositions.size() - 1; i++) {
             if (x >= charXPositions[i] && x < charXPositions[i+1]) {
-                // Check if click is closer to the left or right character boundary
                 double leftDist = x - charXPositions[i];
                 double rightDist = charXPositions[i+1] - x;
                 return (leftDist < rightDist) ? i : i + 1;
             }
         }
         
-        // If beyond the end of text, return the last position
         if (x >= charXPositions.back()) {
             return fText.length();
         }
@@ -304,8 +288,7 @@ protected:
     void insertChar(char c) {
         fText = fText.substr(0, cursorPosition) + c + fText.substr(cursorPosition);
         cursorPosition++;
-        
-        // Schedule text change
+
         scheduleTextChange(fText);
     }
 
@@ -335,7 +318,6 @@ protected:
         }
         cursorPosition--;
         
-        // Schedule text change
         scheduleTextChange(fText);
     }
 
@@ -397,12 +379,6 @@ protected:
                         fPoint[fCoeffCount - 1] = false;
                         fMinus[fCoeffCount - 1] = false;
                     }
-                    // if (fType == "M" && fCallback) {
-                    //     fCallback->setMaxA(fText);
-                    // }
-                    // if (fType == " " && fCallback) {
-                    //     fCallback->generateIfTracking();
-                    // }
                 } else {
                     if (ev.key >= '0' && ev.key <= '9')
                         insertChar(ev.key);
@@ -422,8 +398,6 @@ protected:
                         insertPoint();
                     else if (ev.key == 13)
                         this->setFocused(false);
-                    if (fCallback)
-                        fCallback->setTF(fType + fText);
                 }
             }
             repaint();
@@ -449,15 +423,12 @@ private:
         fTextChangeThreadRunning = true;
         fTextChangeThread = std::thread([this]() {
             while (fTextChangeThreadRunning) {
-                // Check if there's a pending text change
                 if (fTextChanged) {
-                    // Check if enough time has passed since the last update
                     auto now = std::chrono::steady_clock::now();
                     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - fLastTextChangeTime).count();
                         
                     if (elapsedMs >= fTextChangeThrottleMs) {
-                        // Get the pending text change
                         std::string textChange;
                         {
                             std::lock_guard<std::mutex> lock(fTextChangeMutex);
@@ -466,7 +437,6 @@ private:
                             fTextChanged = false;
                         }
                         
-                        // Send the change to the callback
                         if (fCallback) {
                             if (fType == "M") {
                                 fCallback->setMaxA(textChange);
@@ -480,8 +450,7 @@ private:
                         fLastTextChangeTime = now;
                     }
                 }
-                
-                // Sleep to avoid consuming too much CPU
+    
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         });

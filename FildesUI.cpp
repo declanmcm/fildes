@@ -1,20 +1,3 @@
-/*
- * DISTRHO Plugin Framework (DPF)
- * Copyright (C) 2012-2021 Filipe Coelho <falktx@falktx.com>
- * Copyright (C) 2019-2021 Jean Pierre Cimalando <jp-dev@inbox.ru>
- *
- * Permission to use, copy, modify, and/or distribute this software for any purpose with
- * or without fee is hereby granted, provided that the above copyright notice and this
- * permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD
- * TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN
- * NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
- * IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
  #if __cplusplus <= 201103L
 #include <memory>
 
@@ -44,8 +27,7 @@ namespace std {
  #include <functional>
  #include "Eigen/Eigen"
 
-
- class RBJFilterGenerator {
+ class FilterGenerator {
     public:
         enum FilterType {
             LOW_PASS,
@@ -58,44 +40,37 @@ namespace std {
             ALL_PASS
         };
         
-        RBJFilterGenerator() 
+        FilterGenerator() 
             : mSampleRate(44100.0) {}
         
         void setSampleRate(double sampleRate) {
             mSampleRate = sampleRate;
         }
         
-        // Generate filter coefficients using RBJ cookbook formulas
+        // Follow standard RBJ coefficients
         std::pair<std::vector<double>, std::vector<double>> generateFilter(
             FilterType filterType,
             double frequency,
-            double Q = 0.7071, // Default to Butterworth Q
+            double Q = 0.7071, // default Butterworth Q
             double gainDB = 0.0,
-            double bandwidth = 1.0) // Bandwidth in octaves for shelf filters
+            double bandwidth = 1.0) // bandwidth in octaves for shelf filters
         {
-            // Normalize frequency (0 to π)
             double omega = 2.0 * M_PI * frequency / mSampleRate;
             double cosw = cos(omega);
             double sinw = sin(omega);
             double alpha;
             
-            // Calculate alpha based on filter type
             if (filterType == PEAK || filterType == LOW_SHELF || filterType == HIGH_SHELF) {
-                // For shelving and peaking filters, alpha can use bandwidth
                 alpha = sinw * sinh(log(2.0) / 2.0 * bandwidth * omega / sinw);
             } else {
-                // For other filters, use Q
                 alpha = sinw / (2.0 * Q);
             }
             
-            // Convert gain from dB to linear
             double A = pow(10.0, gainDB / 40.0);
             
-            // Initialize coefficients
             double b0 = 0.0, b1 = 0.0, b2 = 0.0;
             double a0 = 1.0, a1 = 0.0, a2 = 0.0;
             
-            // Calculate coefficients based on filter type
             switch (filterType) {
                 case LOW_PASS:
                     b0 = (1.0 - cosw) / 2.0;
@@ -115,7 +90,7 @@ namespace std {
                     a2 = 1.0 - alpha;
                     break;
                     
-                case BAND_PASS: // Constant skirt gain (peak gain = Q)
+                case BAND_PASS:
                     b0 = alpha;
                     b1 = 0.0;
                     b2 = -alpha;
@@ -176,18 +151,8 @@ namespace std {
                     break;
             }
             
-            // Normalize coefficients by a0
             std::vector<double> numerator = {b0 / a0, b1 / a0, b2 / a0};
             std::vector<double> denominator = {1.0, a1 / a0, a2 / a0};
-            
-            // Debug output
-            // std::cout << "Generated RBJ filter coefficients:" << std::endl;
-            // std::cout << "Numerator: ";
-            // for (double c : numerator) std::cout << c << " ";
-            // std::cout << std::endl;
-            // std::cout << "Denominator: ";
-            // for (double c : denominator) std::cout << c << " ";
-            // std::cout << std::endl;
             
             return std::make_pair(numerator, denominator);
         }
@@ -257,7 +222,6 @@ class HelpButton : public CairoSubWidget,
             cairo_t* cr = context.handle;
             if (!cr) return;
             
-            // Draw circle
             if (fHovered) {
                 cairo_set_source_rgb(cr, 0.3, 0.6, 1.0);
             } else {
@@ -272,12 +236,10 @@ class HelpButton : public CairoSubWidget,
             cairo_set_line_width(cr, 1.0);
             cairo_stroke(cr);
             
-            // Draw question mark
             cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
             cairo_set_font_size(cr, size * 0.7);
             cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
             
-            // Center the question mark
             cairo_text_extents_t extents;
             cairo_text_extents(cr, "?", &extents);
             cairo_move_to(cr, 
@@ -317,7 +279,6 @@ class HelpButton : public CairoSubWidget,
         int fHelpId;
     };
     
-    // Add this class for a custom button widget (to be used for the Generate button)
 class CustomButton : public CairoSubWidget,
                         public ButtonEventHandler,
                         public ButtonEventHandler::Callback
@@ -384,23 +345,21 @@ class CustomButton : public CairoSubWidget,
         {
             cairo_t* const cr = context.handle;
     
-            // Draw button background with different colors based on state
             if (fIsPressed) {
-                cairo_set_source_rgb(cr, 0.0, 0.8, 0.0);
+                cairo_set_source_rgb(cr, 0.0, 0.8, 0.0); // highlight green when pressed
             } else if (fIsHovered) {
-                cairo_set_source_rgb(cr, 0.5, 0.5, 0.9); // Lighter blue when hovered
+                cairo_set_source_rgb(cr, 0.5, 0.5, 0.9); // lighter blue when hovered
             } else {
-                cairo_set_source_rgb(cr, 0.6, 0.6, 1.0); // Default blue
+                cairo_set_source_rgb(cr, 0.6, 0.6, 1.0);
             }
             
-            // Draw rounded rectangle
             double radius = 10.0;
             double x = 0;
             double y = 0;
             double width = getWidth();
             double height = getHeight();
             
-            // Rounded corners
+            // rounded corners
             cairo_new_path(cr);
             cairo_arc(cr, x + width - radius, y + radius, radius, -M_PI/2, 0);
             cairo_arc(cr, x + width - radius, y + height - radius, radius, 0, M_PI/2);
@@ -410,13 +369,13 @@ class CustomButton : public CairoSubWidget,
             
             cairo_fill_preserve(cr);
             
-            // Draw border
+            // border
             cairo_set_source_rgb(cr, 0.2, 0.2, 0.7);
             cairo_set_line_width(cr, 2.0);
             cairo_stroke(cr);
     
-            // Draw button text
-            cairo_set_source_rgb(cr, 1.0, 1.0, 1.0); // White text
+            // button text
+            cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
             cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
             cairo_set_font_size(cr, 16.0);
             
@@ -436,10 +395,9 @@ class CustomButton : public CairoSubWidget,
             return ButtonEventHandler::mouseEvent(ev);
         }
         
-        // Fix: Use proper signature for buttonClicked
         void buttonClicked(SubWidget*, int button) override
         {
-            if (button != 1) return;  // Only handle left-click
+            if (button != 1) return;
             
             if (fCallback != nullptr) {
                 fCallback->buttonClicked(this);
@@ -448,14 +406,11 @@ class CustomButton : public CairoSubWidget,
         
         bool onMotion(const MotionEvent& ev) override
         {
-            // Update hover state based on motion
             const bool wasHovered = fIsHovered;
             
-            // Check if mouse is inside widget bounds
             fIsHovered = ev.pos.getX() >= 0 && ev.pos.getX() < getWidth() &&
                         ev.pos.getY() >= 0 && ev.pos.getY() < getHeight();
             
-            // Repaint only if hover state changed
             if (fIsHovered != wasHovered) {
                 repaint();
             }
@@ -544,14 +499,12 @@ class Dropdown : public CairoSubWidget,
             return fId;
         }
 
-        // Override setSize to store width for resizing during open/close
         void setSize(const uint width, const uint height)
         {
             fWidth = width;
             CairoSubWidget::setSize(width, height);
         }
 
-        // Override setAbsolutePos to store position for dropdown positioning
         void setAbsolutePos(const int x, const int y)
         {
             fPosX = x;
@@ -564,30 +517,28 @@ class Dropdown : public CairoSubWidget,
         {
             cairo_t* const cr = context.handle;
             
-            // Draw dropdown box
             if (fIsHovered) {
-                cairo_set_source_rgb(cr, 0.95, 0.95, 0.95); // Lighter when hovered
+                cairo_set_source_rgb(cr, 0.95, 0.95, 0.95); // lighter when hovered
             } else {
-                cairo_set_source_rgb(cr, 0.9, 0.9, 0.9); // Default gray
+                cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
             }
             
-            // Main box
             cairo_rectangle(cr, 0, 0, getWidth(), 30);
             cairo_fill_preserve(cr);
             
-            // Border
+            // border
             cairo_set_source_rgb(cr, 0.4, 0.4, 0.4);
             cairo_set_line_width(cr, 1.0);
             cairo_stroke(cr);
             
-            // Draw selected item text
+            // draw selected item text
             cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
             cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
             cairo_set_font_size(cr, 14.0);
             cairo_move_to(cr, 10, 20);
             cairo_show_text(cr, fItems[fSelectedIndex].c_str());
             
-            // Draw dropdown arrow
+            // dropdown arrow
             cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
             cairo_move_to(cr, getWidth() - 20, 10);
             cairo_line_to(cr, getWidth() - 10, 10);
@@ -595,37 +546,34 @@ class Dropdown : public CairoSubWidget,
             cairo_close_path(cr);
             cairo_fill(cr);
             
-            // Draw dropdown menu if open
+            // draw dropdown menu if open
             if (fIsOpen) {
                 const int itemHeight = 25;
                 const int menuHeight = fItems.size() * itemHeight;
                 
-                // Menu background
                 cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
                 cairo_rectangle(cr, 0, 30, getWidth(), menuHeight);
                 cairo_fill_preserve(cr);
                 
-                // Menu border
                 cairo_set_source_rgb(cr, 0.4, 0.4, 0.4);
                 cairo_stroke(cr);
                 
-                // Draw items
+                // items
                 for (size_t i = 0; i < fItems.size(); i++) {
                     const int y = 30 + i * itemHeight;
                     
-                    // Highlight selected item
+                    // highlight selected
                     if (static_cast<int>(i) == fSelectedIndex) {
                         cairo_set_source_rgb(cr, 0.8, 0.8, 0.9);
                         cairo_rectangle(cr, 0, y, getWidth(), itemHeight);
                         cairo_fill(cr);
                     }
                     
-                    // Item text
                     cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
                     cairo_move_to(cr, 10, y + 18);
                     cairo_show_text(cr, fItems[i].c_str());
                     
-                    // Separator line
+                    // separator line
                     if (i < fItems.size() - 1) {
                         cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
                         cairo_move_to(cr, 0, y + itemHeight);
@@ -641,13 +589,13 @@ class Dropdown : public CairoSubWidget,
             const int y = ev.pos.getY();
             
             if (fIsOpen && y > 30) {
-                // Click in dropdown menu
+                // click in dropdown menu
                 if (ev.press && ev.button == 1) {
                     const int itemHeight = 25;
                     const int itemIndex = (y - 30) / itemHeight;
                     
                     if (itemIndex >= 0 && itemIndex < static_cast<int>(fItems.size())) {
-                        // Select item
+                        // select item
 
                         toggleDropdown(false);
                         fSelectedIndex = itemIndex;
@@ -669,7 +617,6 @@ class Dropdown : public CairoSubWidget,
         void buttonClicked(SubWidget* widget, int button) override
         {
             if (button == 1) {
-                // Toggle dropdown
                 toggleDropdown(!fIsOpen);
             }
         }
@@ -678,7 +625,6 @@ class Dropdown : public CairoSubWidget,
         {
             const int y = ev.pos.getY();
             
-            // Update hover state
             const bool wasHovered = fIsHovered;
             fIsHovered = ev.pos.getX() >= 0 && ev.pos.getX() < getWidth() &&
                         ev.pos.getY() >= 0 && ev.pos.getY() < getHeight();
@@ -688,12 +634,12 @@ class Dropdown : public CairoSubWidget,
             }
             
             if (fIsOpen && y > 30) {
-                // Hover in dropdown menu
+                // hover in dropdown menu
                 const int itemHeight = 25;
                 const int hoverIndex = (y - 30) / itemHeight;
                 
                 if (hoverIndex >= 0 && hoverIndex < static_cast<int>(fItems.size())) {
-                    // Highlight hovered item (simplified for now)
+                    // highlight hovered item
                     repaint();
                 }
             }
@@ -711,10 +657,8 @@ class Dropdown : public CairoSubWidget,
             
             if (open) {
                 toFront();
-                // Expand height to show menu
                 setSize(fWidth, fClosedHeight + menuHeight);
             } else {
-                // Shrink back to closed height
                 setSize(fWidth, fClosedHeight);
             }
             
@@ -733,9 +677,9 @@ class Dropdown : public CairoSubWidget,
         const int fClosedHeight;
     };
 
-class TransferFunctionVisualizer {
+class TransferFunctionVisualiser {
  public:
-     TransferFunctionVisualizer() 
+     TransferFunctionVisualiser() 
          : mNumerator(1, 0.0)
          , mDenominator(1, 1.0)
          , mResponseCache()
@@ -754,13 +698,6 @@ class TransferFunctionVisualizer {
          mNumerator = coeffs;
          mNeedsUpdate = true;
          if (findZeroFlag) findZeros();
- 
-         // Debug output
-        //  std::cout << "Numerator set to: ";
-        //  for (double c : mNumerator) {
-        //      std::cout << c << " ";
-        //  }
-        //  std::cout << std::endl;
      }
 
      void forceUpdate() {
@@ -771,13 +708,6 @@ class TransferFunctionVisualizer {
          mDenominator = coeffs;
          mNeedsUpdate = true;
          findPoles();
- 
-         // Debug output
-        //  std::cout << "Denominator set to: ";
-        //  for (double c : mDenominator) {
-        //      std::cout << c << " ";
-        //  }
-        //  std::cout << std::endl;
      }
  
      void setSampleRate(double sampleRate) {
@@ -787,7 +717,6 @@ class TransferFunctionVisualizer {
      }
  
      void updateFrequencyPoints() {
-         // Create logarithmic frequency scale from 20Hz to Nyquist
          const double nyquist = mSampleRate / 2.0;
          const double minFreq = 20.0;
          const int numPoints = 400;
@@ -796,7 +725,7 @@ class TransferFunctionVisualizer {
          
          for (int i = 0; i < numPoints; ++i) {
              const double t = static_cast<double>(i) / (numPoints - 1);
-             // Logarithmic scale from minFreq to nyquist
+             // log scale from minFreq to nyquist
              mFrequencies[i] = minFreq * std::pow(nyquist / minFreq, t);
          }
          
@@ -812,9 +741,6 @@ class TransferFunctionVisualizer {
          
          const size_t numFreqs = mFrequencies.size();
          double scaleFactor = 0.0;
-
-
-        //  std::cout << "MaxA: " << maxA << std::endl;
          
          for (size_t i = 0; i < numFreqs; ++i) {
              double frequency = mFrequencies[i];
@@ -823,21 +749,18 @@ class TransferFunctionVisualizer {
              std::complex<double> numerator(0.0, 0.0);
              std::complex<double> denominator(0.0, 0.0);
              
-             // Calculate numerator
              for (size_t n = 0; n < mNumerator.size(); ++n) {
                  double angle = -omega * static_cast<double>(n);
                  std::complex<double> z(cos(angle), sin(angle));
                  numerator += mNumerator[n] * z;
              }
              
-             // Calculate denominator
              for (size_t n = 0; n < mDenominator.size(); ++n) {
                  double angle = -omega * static_cast<double>(n);
                  std::complex<double> z(cos(angle), sin(angle));
                  denominator += mDenominator[n] * z;
              }
              
-             // Calculate transfer function
              std::complex<double> response = numerator / denominator;
 
              double absMagnitude = std::abs(response);
@@ -845,12 +768,9 @@ class TransferFunctionVisualizer {
              if (((!push && absMagnitude > maxA) || push) && (absMagnitude > scaleFactor))
                 scaleFactor = absMagnitude;
              
-             // Calculate magnitude in dB and phase
              mMagnitudes[i] = 20.0 * log10(absMagnitude + 1e-6);
              mPhases[i] = std::arg(response);
          }
-
-        //  std::cout << "Scale factor: " << scaleFactor << std::endl;
          
          mNeedsUpdate = false;
         if (scaleFactor != 0)
@@ -865,7 +785,7 @@ class TransferFunctionVisualizer {
         std::complex<double> numerator(0.0, 0.0);
         std::complex<double> denominator(0.0, 0.0);
         
-        // Calculate z^-k = e^(-jwk)
+        // calculate z^-k = e^(-jwk)
         for (size_t k = 0; k < mNumerator.size(); ++k) {
             double phase = -w * k;
             std::complex<double> z(std::cos(phase), std::sin(phase));
@@ -877,8 +797,7 @@ class TransferFunctionVisualizer {
             std::complex<double> z(std::cos(phase), std::sin(phase));
             denominator += mDenominator[k] * z;
         }
-        
-        // Prevent division by zero
+    
         if (std::abs(denominator) < 1e-10) {
             return std::complex<double>(0.0, 0.0);
         }
@@ -886,20 +805,17 @@ class TransferFunctionVisualizer {
         return numerator / denominator;
     }
  
-     // Find roots of a polynomial using companion matrix method
+     // find roots of polynomial using companion matrix method
      std::vector<std::complex<double>> findRoots(const std::vector<double>& coeffs) {
          std::vector<std::complex<double>> roots;
          
-         // Handle special cases
          if (coeffs.empty()) return roots;
          
-         // Remove leading zeros
          std::vector<double> c = coeffs;
          while (c.size() > 1 && std::abs(c.back()) < 1e-10) {
              c.pop_back();
          }
          
-         // Special case: constant or linear polynomial
          if (c.size() <= 2) {
              if (c.size() == 2 && std::abs(c[1]) > 1e-10) {
                  roots.push_back(std::complex<double>(-c[1] / c[0], 0.0));
@@ -907,7 +823,7 @@ class TransferFunctionVisualizer {
              return roots;
          }
          
-         // Normalize the coefficients (a_n = 1)
+         // normalise coefficients
          double lead = c.back();
          for (double& coef : c) {
              coef /= lead;
@@ -915,25 +831,22 @@ class TransferFunctionVisualizer {
          
          const int n = c.size() - 1;
          
-         // Create companion matrix
+         // create companion matrix
          Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n, n);  
          
-         // Fill the first row with negated coefficients
+         // fill first row with negated coefficients
          for (int i = 0; i < n; i++) {
              A(n - 1 - i, n - 1) = -c[i + 1] / c[0];
          }
          
-         // Fill the subdiagonal with ones
+         // fill subdiagonal with ones
          for (int i = 1; i < n; i++) {
              A(i, i - 1) = 1.0;
          }
- 
-        //  std::cout << "matrix:" << A << std::endl;
          
-         // Compute eigenvalues (roots)
+         // compute eigenvalues
          Eigen::EigenSolver<Eigen::MatrixXd> es(A);
          
-         // Extract the eigenvalues
          for (int i = 0; i < n; ++i) {
              std::complex<double> root(es.eigenvalues()[i].real(), es.eigenvalues()[i].imag());
              roots.push_back(root);
@@ -943,37 +856,30 @@ class TransferFunctionVisualizer {
      }
  
      void findZeros() {
-         // Find zeros of the transfer function (roots of numerator)
          mZeros = findRoots(mNumerator);
          updateConjugateIndices(mZeros, mZeroConjugateIndices);
      }
  
      void findPoles() {
-         // Find poles of the transfer function (roots of denominator)
          mPoles = findRoots(mDenominator);
          updateConjugateIndices(mPoles, mPoleConjugateIndices);
      }
  
      void updateConjugateIndices(const std::vector<std::complex<double>>& roots, 
          std::vector<int>& conjugateIndices) {
-         // Reset conjugate indices array
          const size_t numRoots = roots.size();
          conjugateIndices.assign(numRoots, -1);
  
-         // Find conjugate pairs
          for (size_t i = 0; i < numRoots; ++i) {
-             // Skip if this root already has a conjugate assigned
              if (conjugateIndices[i] != -1) continue;
  
-             // Check if this root has a significant imaginary part
              if (std::abs(roots[i].imag()) > 1e-10) {
-                 // Look for its conjugate
                  for (size_t j = i + 1; j < numRoots; ++j) {
                      double realDiff = std::abs(roots[j].real() - roots[i].real());
                      double imagSum = std::abs(roots[j].imag() + roots[i].imag());
  
                      if (realDiff < 1e-10 && imagSum < 1e-10) {
-                         // Found conjugate pair, store bidirectional indices
+                         // found conjugate pair, store bidirectional indices
                          conjugateIndices[i] = j;
                          conjugateIndices[j] = i;
                          break;
@@ -981,39 +887,25 @@ class TransferFunctionVisualizer {
                  }
              }
          }
- 
-         // Debug output
-        //  std::cout << "Conjugate Indices: ";
-        //  for (int idx : conjugateIndices) {
-        //  std::cout << idx << " ";
-        //  }
-        //  std::cout << std::endl;
      }
  
-     // Update a pole or zero based on dragging
      void updatePoleZero(bool isPole, int index, const std::complex<double>& newValue) {
          if (index < 0) return;
          
-         // Get references to the appropriate arrays
          std::vector<std::complex<double>>& roots = isPole ? mPoles : mZeros;
          std::vector<int>& conjugateIndices = isPole ? mPoleConjugateIndices : mZeroConjugateIndices;
          
          if (index >= static_cast<int>(roots.size())) return;
          
-         // Update the root
          roots[index] = newValue;
          
-         // Check if this root has a conjugate pair that needs updating
+         // check if conjugate pair needs updating
          int conjugateIndex = conjugateIndices[index];
          if (conjugateIndex >= 0 && conjugateIndex < static_cast<int>(roots.size())) {
-             // Update the conjugate with the appropriate value
              roots[conjugateIndex] = std::complex<double>(newValue.real(), -newValue.imag());
-             
-             // Debug output
-            //  std::cout << "Updated conjugate at index " << conjugateIndex << std::endl;
          } else if (std::abs(newValue.imag()) > 1e-10) {
-             // This root has a significant imaginary part, but no conjugate is assigned
-             // Try to find a real root to convert to a conjugate, or the closest root
+             // significant imaginary part, but no conjugate assigned
+             // assign a root
              int newConjugateIndex = -1;
              double minDistance = 1e10;
              
@@ -1038,35 +930,20 @@ class TransferFunctionVisualizer {
                 }
              }
              
-             // If we found a suitable root, convert it to a conjugate
              if (newConjugateIndex >= 0) {
                  roots[newConjugateIndex] = std::complex<double>(newValue.real(), -newValue.imag());
                  
-                 // Update conjugate indices in both directions
                  conjugateIndices[index] = newConjugateIndex;
                  conjugateIndices[newConjugateIndex] = index;
-                 
-                //  std::cout << "Created new conjugate pair: " << index << " <-> " << newConjugateIndex << std::endl;
              } else {
-                 // Couldn't find a suitable conjugate, force this to be real
+                // no suitable conjugate found, force to be real
                  roots[index] = std::complex<double>(newValue.real(), 0.0);
                  conjugateIndices[index] = -1;
-                 
-                //  std::cout << "Forced root to be real - no conjugate available" << std::endl;
              }
          }
- 
-        //  std::cout << "roots: ";
-        //  for (const auto& coeff : roots) {
-        //      std::cout << coeff << " ";
-        //  }
-        //  std::cout << std::endl;
          
-         // Immediately update the coefficients
          if (isPole) {
              std::vector<double> newDenominator = rootsToCoeffs(mPoles);
-             
-             // Normalize denominator so that z^0 term is 1.0
              if (!newDenominator.empty() && std::abs(newDenominator[0]) > 1e-10) {
                  double z0Coeff = newDenominator[0];
                  for (double& coeff : newDenominator) {
@@ -1079,51 +956,37 @@ class TransferFunctionVisualizer {
              mNumerator = rootsToCoeffs(mZeros);
          }
          
-         // Mark for response update
          mNeedsUpdate = true;
      }
  
-     // Convert roots back to polynomial coefficients
      std::vector<double> rootsToCoeffs(const std::vector<std::complex<double>>& roots) {
-         // Special case: no roots
          if (roots.empty()) {
              return {1.0};
          }
          
-         // Start with the term (z - r_0)
+         // start with (z - r_0)
          std::vector<std::complex<double>> coeffs = {-roots[0], 1.0};
          
-         // Multiply by each (z - r_i) term
+         // multiply by each (z - r_i)
          for (size_t i = 1; i < roots.size(); ++i) {
              std::vector<std::complex<double>> newCoeffs(coeffs.size() + 1, std::complex<double>(0.0, 0.0));
              
-             // Multiply coeffs by (z - r_i)
              for (size_t j = 0; j < coeffs.size(); ++j) {
-                 // Term for z^j * z (increases the power)
                  newCoeffs[j + 1] += coeffs[j];
-                 
-                 // Term for z^j * (-r_i) (same power)
                  newCoeffs[j] -= coeffs[j] * roots[i];
              }
              
              coeffs = newCoeffs;
          }
          
-         // Convert complex coefficients to real
          std::vector<double> realCoeffs(coeffs.size(), 0.0);
          for (size_t i = 0; i < coeffs.size(); ++i) {
-             // Handle very small values that might be numerical artifacts
+             // very small values might be numerical errors
              if (std::abs(coeffs[i].real()) < 1e-12) {
                  realCoeffs[i] = 0.0;
              } else {
                  realCoeffs[i] = coeffs[i].real();
              }
-             
-            // Print warning for non-negligible imaginary parts
-            //  if (std::abs(coeffs[i].imag()) > 1e-8) {
-            //      std::cout << "Warning: Significant imaginary component in coefficient: " 
-            //              << coeffs[i].imag() << std::endl;
-            //  }
          }
  
  
@@ -1132,15 +995,12 @@ class TransferFunctionVisualizer {
          return realCoeffs;
      }
  
-     // Update coefficients from poles and zeros
      bool updateCoefficientsFromRoots() {
-         // Convert zeros to numerator coefficients
          std::vector<double> newNum = rootsToCoeffs(mZeros);
          
-         // Convert poles to denominator coefficients
          std::vector<double> newDen = rootsToCoeffs(mPoles);
          
-         // Normalize denominator so that z^0 term is 1.0
+         // normalize denominator to make z^0 term 1
          if (!newDen.empty() && std::abs(newDen[0]) > 1e-10) {
              double z0Coeff = newDen[0];
              for (double& coeff : newDen) {
@@ -1148,7 +1008,6 @@ class TransferFunctionVisualizer {
              }
          }
          
-         // Check if coefficients have changed
          bool changed = false;
          
          if (newNum.size() != mNumerator.size()) {
@@ -1249,13 +1108,11 @@ class TransferFunctionVisualizer {
  
  START_NAMESPACE_DISTRHO
  
- // We need a few classes from DGL.
  using DGL_NAMESPACE::CairoGraphicsContext;
  using DGL_NAMESPACE::CairoImage;
  using DGL_NAMESPACE::CairoImageKnob;
  using DGL_NAMESPACE::CairoImageSwitch;
- 
- // And from ourselves
+
  using DGL_NAMESPACE::DemoWidgetBanner;
  using DGL_NAMESPACE::EditableText;
  
@@ -1272,7 +1129,7 @@ class FildesUI : public UI,
      ScopedPointer<EditableText> fCoeffT, fCoeffB;
      ScopedPointer<DGL::SubWidget> fContainer;
 
-     ScopedPointer<RBJFilterGenerator> fRBJFilterGenerator;
+     ScopedPointer<FilterGenerator> fFilterGenerator;
      ScopedPointer<Dropdown> fFilterTypeDropdown;
      ScopedPointer<EditableText> fFrequencyInput;
      ScopedPointer<EditableText> fQInput;
@@ -1291,12 +1148,10 @@ class FildesUI : public UI,
     std::string fCurrentHelpTitle;
     DGL::Rectangle<int> fHelpBox;
  
-     // Add the visualizer
-     TransferFunctionVisualizer fVisualizer;
+     TransferFunctionVisualiser fVisualiser;
 
      ScopedPointer<EditableText> fGainInput;
      
-     // Store the current coefficients
      std::vector<double> fNumerator;
      std::vector<double> fDenominator;
      
@@ -1317,21 +1172,18 @@ class FildesUI : public UI,
     std::string fPendingBottomTF;
     std::chrono::time_point<std::chrono::steady_clock> fLastUpdateTime;
     std::mutex fUpdateMutex;
-    const int fUpdateThrottleMs = 50; // Minimum ms between updates
+    const int fUpdateThrottleMs = 50;
  
  public:
      FildesUI()
      {
          freopen("output.txt","w",stdout);
-        //  std::cout << "start\n" << std::flush;
-
-        //  freopen("nums.txt", "w", stderr);
          
-         // Initialize with default filter coefficients
+         // default filter coefficients
          parseCoefficients("1", fNumerator);
          parseCoefficients("1", fDenominator);
-         fVisualizer.setNumerator(fNumerator, true);
-         fVisualizer.setDenominator(fDenominator);
+         fVisualiser.setNumerator(fNumerator, true);
+         fVisualiser.setDenominator(fDenominator);
          fGeneratorTracking = false;
  
          fWidgetClickable = new DemoWidgetClickable(this);
@@ -1341,7 +1193,6 @@ class FildesUI : public UI,
          fWidgetClickable->setId(kParameterTriState);
          fWidgetClickable->setVisible(false);
  
-         // Initialize in constructor
          fCoeffT = new EditableText(this, "T");
          fCoeffT->setAbsolutePos(150, 50);
          fCoeffT->setSize(615, 30);
@@ -1360,20 +1211,17 @@ class FildesUI : public UI,
         fMaxAInput->setText("");
         fMaxA = 99999999999;
 
-         // Create gain input field
         fGainInput = new EditableText(this, "G");
         fGainInput->setAbsolutePos(865, 100);
         fGainInput->setSize(100, 30);
         fGainInput->setCallback(this);
         fGainInput->setText("");
 
-         // Set up the response and pole-zero areas
         fResponseArea = DGL::Rectangle<int>(50, 150, 700, 200);
         fPoleZeroArea = DGL::Rectangle<int>(500, 385, 250, 250);
         fNyquistArea = DGL::Rectangle<int>(775, 150, 200, 200);
         fHelpBox = DGL::Rectangle<int>(775, 385, 200, 250);
          
-         // Initialize dragging state
          fIsDragging = false;
          fDraggingPole = false;
          fDraggedIndex = -1;
@@ -1385,11 +1233,11 @@ class FildesUI : public UI,
          if (scaleFactor != 1.0)
              setSize(800 * scaleFactor, 650 * scaleFactor);
 
-        // Initialize RBJ filter generator
-        fRBJFilterGenerator = new RBJFilterGenerator();
-        fRBJFilterGenerator->setSampleRate(getSampleRate());
+        // init filter generator
+        fFilterGenerator = new FilterGenerator();
+        fFilterGenerator->setSampleRate(getSampleRate());
 
-        // Create filter type dropdown for RBJ cookbook filters
+        // create filter type dropdown for filter generator
         std::vector<std::string> filterTypes = {
             "Low Pass", "High Pass", "Band Pass", "Notch", 
             "Peak", "Low Shelf", "High Shelf", "All Pass"
@@ -1399,21 +1247,19 @@ class FildesUI : public UI,
         fFilterTypeDropdown->setSize(200, 30);
         fFilterTypeDropdown->setCallback(this);
 
-        // Create frequency input
+        // freq. cutoff
         fFrequencyInput = new EditableText(this, " ");
         fFrequencyInput->setAbsolutePos(150, 470);
         fFrequencyInput->setSize(150, 30);
         fFrequencyInput->setCallback(this);
         fFrequencyInput->setText("1000");
 
-        // Create Q input
         fQInput = new EditableText(this, " ");
         fQInput->setAbsolutePos(150, 520);
         fQInput->setSize(150, 30);
         fQInput->setCallback(this);
         fQInput->setText("0.7071");
 
-        // Create gain dB input (for peak and shelf filters)
         fGainDBInput = new EditableText(this, " ");
         fGainDBInput->setAbsolutePos(150, 520);
         fGainDBInput->setSize(150, 30);
@@ -1421,7 +1267,6 @@ class FildesUI : public UI,
         fGainDBInput->setText("0.0");
         fGainDBInput->setVisible(false);
 
-        // Create bandwidth input (alternative to Q for some filters)
         fBandwidthInput = new EditableText(this, " ");
         fBandwidthInput->setAbsolutePos(320, 520);
         fBandwidthInput->setSize(150, 30);
@@ -1429,7 +1274,7 @@ class FildesUI : public UI,
         fBandwidthInput->setText("1.0");
         fBandwidthInput->setVisible(false);
 
-        // Create generate button
+        // button to toggle tracking changes to filter generator
         fGenerateButton = new CustomButton(this, "Track changes");
         fGenerateButton->setAbsolutePos(150, 570);
         fGenerateButton->setSize(150, 40);
@@ -1440,7 +1285,6 @@ class FildesUI : public UI,
         fToLimitButton->setSize(150, 40);
         fToLimitButton->setCallback(this);
 
-        // Add these to the fTextInputs array
         fTextInputs[3] = &fFrequencyInput;
         fTextInputs[4] = &fQInput;
         fTextInputs[5] = &fGainDBInput;
@@ -1450,30 +1294,17 @@ class FildesUI : public UI,
         fTextInputs[2] = &fGainInput;
         fTextInputs[7] = &fMaxAInput;
 
-        // Initialize visibility based on current filter type
         updateFilterParametersVisibility();
 
+        // init tooltip area text
         fCurrentHelpTitle = "Welcome to Fildes";
         fCurrentHelpText = "Use the transfer function numerator/denominator text boxes, the pole/zero plot (dragging poles or zeros) or the filter generator to shape the filter. As you make changes, you will hear it, see its trans. func. coefficients, see its magnitude and phase response and pole/zero positions.";
         
-        // Initialize help buttons
         createHelpButtons();
 
         fUpdatePending = false;
         fLastUpdateTime = std::chrono::steady_clock::now();
-        
-        // Start the update thread
-        startUpdateThread();
      }
-
-     ~FildesUI() 
-    {
-        // Signal the update thread to stop
-        fUpdateThreadRunning = false;
-        if (fUpdateThread.joinable()) {
-            fUpdateThread.join();
-        }
-    }
 
      void createHelpButtons() {
         // Create help buttons for major UI sections
@@ -1498,7 +1329,6 @@ class FildesUI : public UI,
 
     void drawFilterParameterLabels(cairo_t* cr)
     {
-        // Draw filter generator section title
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         if (fUpdatedFromFG) cairo_set_source_rgb(cr, 0.0, 0.5, 0.0);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
@@ -1508,7 +1338,7 @@ class FildesUI : public UI,
 
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         
-        // Draw filter parameter labels
+        // draw filter parameter labels
         cairo_set_font_size(cr, 16);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         
@@ -1523,13 +1353,11 @@ class FildesUI : public UI,
             cairo_show_text(cr, "Q:");
         }
         
-        // Show bandwidth label if applicable
         if (fBandwidthInput->isVisible()) {
             cairo_move_to(cr, 320, 490);
             cairo_show_text(cr, "Bandwidth (oct):");
         }
         
-        // Show gain label if applicable
         if (fGainDBInput->isVisible()) {
             cairo_move_to(cr, 10, 540);
             cairo_show_text(cr, "Gain (dB):");
@@ -1537,30 +1365,26 @@ class FildesUI : public UI,
     }
 
     void drawHelpBox(cairo_t* cr) {
-        // Draw the box
         cairo_set_source_rgb(cr, 0.95, 0.95, 0.95);
         cairo_rectangle(cr, fHelpBox.getX(), fHelpBox.getY(), 
                         fHelpBox.getWidth(), fHelpBox.getHeight());
         cairo_fill_preserve(cr);
         
-        // Draw the border
+        // border
         cairo_set_source_rgb(cr, 0.3, 0.3, 0.7);
         cairo_set_line_width(cr, 2.0);
         cairo_stroke(cr);
         
-        // Draw title
         cairo_set_source_rgb(cr, 0.2, 0.2, 0.6);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
         cairo_set_font_size(cr, 16);
         cairo_move_to(cr, fHelpBox.getX() + 10, fHelpBox.getY() + 20);
         cairo_show_text(cr, fCurrentHelpTitle.c_str());
         
-        // Draw help text with word wrapping
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 12);
         
-        // Simple word wrap for the help text
         int x = fHelpBox.getX() + 10;
         int y = fHelpBox.getY() + 40;
         int maxWidth = fHelpBox.getWidth() - 20;
@@ -1577,18 +1401,18 @@ class FildesUI : public UI,
             cairo_text_extents(cr, testLine.c_str(), &extents);
             
             if (extents.width > maxWidth && !currentLine.empty()) {
-                // Line would be too long, print current line and start a new one
+                // line would be too long, print current line and start a new one
                 cairo_move_to(cr, x, y);
                 cairo_show_text(cr, currentLine.c_str());
-                y += 20;  // Line height
+                y += 20;  // line height
                 currentLine = word;
             } else {
-                // Add word to current line
+                // add word to current line
                 currentLine = testLine;
             }
         }
         
-        // Print the last line
+        // print the last line
         if (!currentLine.empty()) {
             cairo_move_to(cr, x, y);
             cairo_show_text(cr, currentLine.c_str());
@@ -1644,7 +1468,6 @@ class FildesUI : public UI,
 
      void drawNyquistPlot(cairo_t* cr)
     {
-        // Prepare the plot area
         const int x = fNyquistArea.getX();
         const int y = fNyquistArea.getY();
         const int width = fNyquistArea.getWidth();
@@ -1652,7 +1475,6 @@ class FildesUI : public UI,
         const int centerX = x + width / 2;
         const int centerY = y + height / 2;
         
-        // Draw border and background
         cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
         cairo_rectangle(cr, x, y, width, height);
         cairo_fill_preserve(cr);
@@ -1660,38 +1482,38 @@ class FildesUI : public UI,
         cairo_set_line_width(cr, 1.0);
         cairo_stroke(cr);
         
-        // Draw axes
+        // axes
         cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
         cairo_set_line_width(cr, 1.0);
         
-        // Horizontal axis (real part)
+        // horizontal axis
         cairo_move_to(cr, x, centerY);
         cairo_line_to(cr, x + width, centerY);
         
-        // Vertical axis (imaginary part)
+        // vertical axis
         cairo_move_to(cr, centerX, y);
         cairo_line_to(cr, centerX, y + height);
         
         cairo_stroke(cr);
         
-        // Draw unit circle
+        // unit circle
         cairo_set_source_rgba(cr, 0.5, 0.5, 0.5, 0.3);
         cairo_arc(cr, centerX, centerY, width / 4, 0, 2 * M_PI);
         cairo_stroke(cr);
         
-        // Calculate and draw Nyquist plot
-        const std::vector<double>& frequencies = fVisualizer.getFrequencies();
+        // calculate and draw Nyquist plot
+        const std::vector<double>& frequencies = fVisualiser.getFrequencies();
         
         if (frequencies.empty()) {
             return;
         }
         
-        // Get frequency response at each point
+        // get frequency response at each point
         std::vector<std::complex<double>> nyquistPoints;
         double maxMagnitude = 0.0;
         
         for (const auto& freq : frequencies) {
-            std::complex<double> response = fVisualizer.getComplexResponseAtFrequency(freq);
+            std::complex<double> response = fVisualiser.getComplexResponseAtFrequency(freq);
             nyquistPoints.push_back(response);
             
             double magnitude = std::abs(response);
@@ -1700,10 +1522,8 @@ class FildesUI : public UI,
             }
         }
         
-        // Scale factor to fit the plot (use min dimension)
         double scaleFactor = (std::min(width, height) / 2) / (maxMagnitude * 1.2);
         
-        // Plot the Nyquist curve
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.8);
         if (fFilterUnstable) cairo_set_source_rgb(cr, 0.8, 0.0, 0.0);
         cairo_set_line_width(cr, 2.0);
@@ -1725,10 +1545,9 @@ class FildesUI : public UI,
         
         cairo_stroke(cr);
         
-        // Mark specific frequencies
+        // mark specific frequencies
         const double markedFreqs[] = {20, 100, 1000, 10000, 20000};
         for (const auto& markedFreq : markedFreqs) {
-            // Find closest frequency in our data
             size_t index = 0;
             double minDiff = std::abs(frequencies[0] - markedFreq);
             
@@ -1740,7 +1559,7 @@ class FildesUI : public UI,
                 }
             }
             
-            // Draw a small circle at this frequency point
+            // draw a small circle at that frequency point
             double plotX = centerX + nyquistPoints[index].real() * scaleFactor;
             double plotY = centerY - nyquistPoints[index].imag() * scaleFactor;
             
@@ -1748,7 +1567,7 @@ class FildesUI : public UI,
             cairo_arc(cr, plotX, plotY, 3.0, 0, 2 * M_PI);
             cairo_fill(cr);
             
-            // Label the frequency
+            // label frequency
             cairo_set_font_size(cr, 9);
             std::string label;
             if (markedFreq >= 1000) {
@@ -1761,14 +1580,12 @@ class FildesUI : public UI,
             cairo_show_text(cr, label.c_str());
         }
         
-        // Draw title
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
         cairo_set_font_size(cr, 14);
         cairo_move_to(cr, x + 10, y + 20);
         cairo_show_text(cr, "Nyquist Plot");
         
-        // Draw axis labels
         cairo_set_font_size(cr, 10);
         cairo_move_to(cr, x + width - 30, centerY + 15);
         cairo_show_text(cr, "Re");
@@ -1779,19 +1596,17 @@ class FildesUI : public UI,
  
      void drawFrequencyResponse(cairo_t* cr)
      {
-         // Calculate the response if needed
-         double factor = fVisualizer.calculateResponse(fMaxA, fPush);
-        //  std::cout << "factor: " << factor << std::endl;
+         double factor = fVisualiser.calculateResponse(fMaxA, fPush);
          if (factor != 0.0) {
-            std::vector<double> num = fVisualizer.getNumerator();
+            std::vector<double> num = fVisualiser.getNumerator();
             std::vector<double> newNum;
 
             for (const auto& coeff : num)
                 newNum.push_back(coeff * factor);
 
             fNumerator = newNum;
-            fVisualizer.setNumerator(fNumerator, false);
-            fVisualizer.calculateResponse(fMaxA, fPush);
+            fVisualiser.setNumerator(fNumerator, false);
+            fVisualiser.calculateResponse(fMaxA, fPush);
 
             std::string numStr = formatCoefficients(fNumerator, false);
             fCoeffT->setText(numStr);
@@ -1799,13 +1614,11 @@ class FildesUI : public UI,
             setState("topTF", numStr.c_str());
          }
          
-         // Prepare the plot area
          const int x = fResponseArea.getX();
          const int y = fResponseArea.getY();
          const int width = fResponseArea.getWidth();
          const int height = fResponseArea.getHeight();
          
-         // Draw border and background
          cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
          cairo_rectangle(cr, x, y, width, height);
          cairo_fill_preserve(cr);
@@ -1813,22 +1626,19 @@ class FildesUI : public UI,
          cairo_set_line_width(cr, 1.0);
          cairo_stroke(cr);
          
-         // Draw grid lines
+         // grid lines
          drawGrid(cr, x, y, width, height);
          
-         // Get frequency response data
-         const std::vector<double>& frequencies = fVisualizer.getFrequencies();
-         const std::vector<double>& magnitudes = fVisualizer.getMagnitudes();
+         const std::vector<double>& frequencies = fVisualiser.getFrequencies();
+         const std::vector<double>& magnitudes = fVisualiser.getMagnitudes();
          
          if (frequencies.empty() || magnitudes.empty()) {
              return;
          }
          
-         // Define magnitude range in dB (adjust as needed)
          const double minDb = -60.0;
          const double maxDb = 20.0;
          
-         // Draw the magnitude response
          cairo_set_source_rgb(cr, 0.0, 0.0, 0.8);
          if (fFilterUnstable) cairo_set_source_rgb(cr, 0.8, 0.0, 0.0);
          cairo_set_line_width(cr, 2.0);
@@ -1836,14 +1646,14 @@ class FildesUI : public UI,
          cairo_new_path(cr);
          
          for (size_t i = 0; i < frequencies.size(); ++i) {
-             // Map frequency to x (logarithmic)
+             // map frequency to x (log)
              const double logMinFreq = log10(20.0);
              const double logMaxFreq = log10(22050.0);
              const double logFreq = log10(frequencies[i]);
              const double normalizedX = (logFreq - logMinFreq) / (logMaxFreq - logMinFreq);
              const double plotX = x + normalizedX * width;
              
-             // Map magnitude to y (linear in dB)
+             // map magnitude to y (linear in dB)
              const double normalizedY = (magnitudes[i] - minDb) / (maxDb - minDb);
              const double clampedY = std::max(0.0, std::min(1.0, normalizedY));
              const double plotY = y + height - (clampedY * height);
@@ -1856,8 +1666,7 @@ class FildesUI : public UI,
          }
          
          cairo_stroke(cr);
-         
-         // Draw labels
+        
          drawFrequencyLabels(cr, x, y, width, height);
          drawMagnitudeLabels(cr, x, y, width, height, minDb, maxDb);
          return;
@@ -1865,7 +1674,6 @@ class FildesUI : public UI,
  
      void drawPoleZeroPlot(cairo_t* cr)
      {
-         // Prepare the plot area
          const int x = fPoleZeroArea.getX();
          const int y = fPoleZeroArea.getY();
          const int size = fPoleZeroArea.getHeight(); // Square plot
@@ -1873,7 +1681,6 @@ class FildesUI : public UI,
          const int centerX = x + size / 2;
          const int centerY = y + size / 2;
          
-         // Draw border and background
          cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
          cairo_rectangle(cr, x, y, size, size);
          cairo_fill_preserve(cr);
@@ -1881,42 +1688,39 @@ class FildesUI : public UI,
          cairo_set_line_width(cr, 1.0);
          cairo_stroke(cr);
          
-         // Draw unit circle
+         // unit circle
          cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
          cairo_set_line_width(cr, 1.0);
          cairo_arc(cr, centerX, centerY, radius, 0, 2 * M_PI);
          cairo_stroke(cr);
          
-         // Draw axes
+         // axes
          cairo_move_to(cr, centerX - radius - 5, centerY);
          cairo_line_to(cr, centerX + radius + 5, centerY);
          cairo_move_to(cr, centerX, centerY - radius - 5);
          cairo_line_to(cr, centerX, centerY + radius + 5);
          cairo_stroke(cr);
          
-         // Draw poles (x)
-         cairo_set_source_rgb(cr, 0.8, 0.0, 0.0); // Red for poles
-         const std::vector<std::complex<double>>& poles = fVisualizer.getPoles();
+         // poles (x)
+         cairo_set_source_rgb(cr, 0.8, 0.0, 0.0); // red for poles
+         const std::vector<std::complex<double>>& poles = fVisualiser.getPoles();
         
          for (const auto& pole : poles) {
-             // Map complex coordinate to plot coordinate
+             // map complex coordinate to plot coordinate
              const double plotX = centerX + pole.real() * radius;
              const double plotY = centerY - pole.imag() * radius;
              const double crossSize = 6.0;
 
              if (500 + crossSize >= plotX || plotX >= 750 - crossSize || 385 + crossSize >= plotY || plotY >= 635 - crossSize) {
                 // Would fall outside of plot, do not plot
-                // std::cout << "Pole pos:" << plotX << ", " << plotY << std::endl;
                 double posx = std::max(500 + crossSize, std::min(750 - crossSize, plotX));
                 double posy = std::max(385 + crossSize, std::min(635 - crossSize, plotY));
-                // std::cout << "New pos:" << posx << ", " << posy << std::endl;
                 cairo_set_line_width(cr, 2.0);
                 cairo_arc(cr, posx, posy, 1.0, 0, 2 * M_PI);
                 cairo_stroke(cr);
                 continue;
              }
              
-             // Draw X
              cairo_set_line_width(cr, 2.0);
              cairo_move_to(cr, plotX - crossSize, plotY - crossSize);
              cairo_line_to(cr, plotX + crossSize, plotY + crossSize);
@@ -1925,18 +1729,16 @@ class FildesUI : public UI,
              cairo_stroke(cr);
          }
          
-         // Draw zeros (o)
-         cairo_set_source_rgb(cr, 0.0, 0.0, 0.8); // Blue for zeros
-         const std::vector<std::complex<double>>& zeros = fVisualizer.getZeros();
+         // zeros (o)
+         cairo_set_source_rgb(cr, 0.0, 0.0, 0.8); // blue for zeros
+         const std::vector<std::complex<double>>& zeros = fVisualiser.getZeros();
          
          for (const auto& zero : zeros) {
-             // Map complex coordinate to plot coordinate
              const double plotX = centerX + zero.real() * radius;
              const double plotY = centerY - zero.imag() * radius;
              const double circleSize = 6.0;
 
              if (500 + circleSize > plotX || plotX > 750 - circleSize || 385 + circleSize > plotY || plotY > 635 - circleSize) {
-                // Would fall outside of plot, do not plot
                 double posx = std::max(500 + circleSize, std::min(750 - circleSize, plotX));
                 double posy = std::max(385 + circleSize, std::min(635 - circleSize, plotY));
                 cairo_set_line_width(cr, 2.0);
@@ -1945,13 +1747,11 @@ class FildesUI : public UI,
                 continue;
              }
              
-             // Draw O
              cairo_set_line_width(cr, 2.0);
              cairo_arc(cr, plotX, plotY, circleSize, 0, 2 * M_PI);
              cairo_stroke(cr);
          }
          
-         // Draw title
          if (fUpdatedFromPZP) cairo_set_source_rgb(cr, 0.0, 0.5, 0.0);
          else cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
@@ -1960,7 +1760,6 @@ class FildesUI : public UI,
          cairo_show_text(cr, "Pole-Zero Plot");
          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          
-         // Draw drag instruction
          cairo_set_font_size(cr, 10);
          cairo_move_to(cr, x + 10, y + size - 10);
          cairo_show_text(cr, "Drag poles (x) and zeros (o) to modify filter");
@@ -1969,7 +1768,6 @@ class FildesUI : public UI,
         double nyquist_freq = sample_rate / 2.0;
         double quarter_freq = nyquist_freq / 2.0;
 
-        // Format frequency values
         char labelDC[32], labelNyquist[32], labelQuarter[32];
         snprintf(labelDC, sizeof(labelDC), "0 Hz");
         snprintf(labelNyquist, sizeof(labelNyquist), "%.2f kHz", nyquist_freq / 1000.0);
@@ -1988,18 +1786,16 @@ class FildesUI : public UI,
  
      void drawGrid(cairo_t* cr, int x, int y, int width, int height)
      {
-         // Draw horizontal grid lines (magnitude)
          cairo_set_source_rgba(cr, 0.5, 0.5, 0.5, 0.5);
          cairo_set_line_width(cr, 0.5);
          
-         const int numMagLines = 9; // -60, -50, -40, -30, -20, -10, 0, 10, 20 dB
+         const int numMagLines = 9;
          for (int i = 0; i < numMagLines; ++i) {
              const double yPos = y + i * (height / (numMagLines - 1));
              cairo_move_to(cr, x, yPos);
              cairo_line_to(cr, x + width, yPos);
          }
          
-         // Draw vertical grid lines (frequency)
          const double freqs[] = {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
          const int numFreqs = sizeof(freqs) / sizeof(freqs[0]);
          
@@ -2019,7 +1815,6 @@ class FildesUI : public UI,
  
      void drawFrequencyLabels(cairo_t* cr, int x, int y, int width, int height)
      {
-         // Draw frequency labels
          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
          cairo_set_font_size(cr, 10);
@@ -2034,7 +1829,6 @@ class FildesUI : public UI,
              const double normalizedX = (logFreq - logMinFreq) / (logMaxFreq - logMinFreq);
              const double xPos = x + normalizedX * width;
              
-             // Format frequency label
              std::string label;
              if (freqs[i] >= 1000) {
                  label = std::to_string(static_cast<int>(freqs[i] / 1000)) + "k";
@@ -2048,8 +1842,7 @@ class FildesUI : public UI,
              cairo_move_to(cr, xPos - extents.width / 2, y + height + 15);
              cairo_show_text(cr, label.c_str());
          }
-         
-         // X-axis label
+
          cairo_set_font_size(cr, 12);
          cairo_text_extents_t extents;
          const char* xLabel = "Frequency (Hz)";
@@ -2060,12 +1853,11 @@ class FildesUI : public UI,
      
      void drawMagnitudeLabels(cairo_t* cr, int x, int y, int width, int height, double minDb, double maxDb)
      {
-         // Draw magnitude labels
          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
          cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
          cairo_set_font_size(cr, 10);
          
-         const int numLabels = 9; // -60, -50, -40, -30, -20, -10, 0, 10, 20 dB
+         const int numLabels = 9;
          for (int i = 0; i < numLabels; ++i) {
              const double db = minDb + i * ((maxDb - minDb) / (numLabels - 1));
              const double yPos = y + height - i * (height / (numLabels - 1));
@@ -2079,7 +1871,6 @@ class FildesUI : public UI,
              cairo_show_text(cr, label.c_str());
          }
          
-         // Y-axis label
          cairo_set_font_size(cr, 12);
          cairo_save(cr);
          cairo_text_extents_t extents;
@@ -2094,12 +1885,10 @@ class FildesUI : public UI,
      void parseCoefficients(const char* str, std::vector<double>& coeffs, bool isDenominator = false) {
          coeffs.clear();
          
-         // Create a copy of the input string to tokenize
          char inputCopy[1024];
          strncpy(inputCopy, str, sizeof(inputCopy) - 1);
          inputCopy[sizeof(inputCopy) - 1] = '\0';
          
-         // Parse comma-separated values into a temporary vector
          std::vector<double> tempCoeffs;
          char* token = strtok(inputCopy, ",");
          while (token != NULL) {
@@ -2109,61 +1898,44 @@ class FildesUI : public UI,
          }
          
          if (isDenominator) {
-             // For denominator, ALWAYS add z^0 term with coefficient 1.0 at the beginning
-             // This is the implicit term that's not displayed in the text field
+             // for denominator, always add z^0 term with coefficient 1 at beginning
+             // implicit term that's not displayed in the text field
              coeffs.push_back(1.0);
              
-             // Then add the parsed coefficients (which are z^-1 and higher terms)
+             // add parsed coefficients
              coeffs.insert(coeffs.end(), tempCoeffs.begin(), tempCoeffs.end());
          } else {
-             // For numerator, use the coefficients as is
              coeffs = tempCoeffs;
          }
-         
-         // Debug: print the parsed coefficients
-        //  std::cout << "Parsed coefficients (isDenominator=" << isDenominator << "): ";
-        //  for (double c : coeffs) {
-            //  std::cout << c << " ";
-        //  }
-        //  std::cout << std::endl;
      }
  
-     // Format coefficients to string for display
      std::string formatCoefficients(const std::vector<double>& coeffs, bool isDenominator = false) {
          std::string result;
-     
-         // For denominator, we need to normalize to make z^0 term = 1 and skip it in the output
+    
          std::vector<double> normalizedCoeffs;
          
          if (isDenominator && coeffs.size() > 0) {
-             // Get the z^0 coefficient (should be the first element)
              double z0Coeff = coeffs[0];
              
-             // Skip the z^0 term and normalize the rest by dividing by z0Coeff
              if (std::abs(z0Coeff) > 1e-10) {
                  normalizedCoeffs.reserve(coeffs.size() - 1);
                  for (size_t i = 1; i < coeffs.size(); ++i) {
                      normalizedCoeffs.push_back(coeffs[i] / z0Coeff);
                  }
              } else {
-                 // If z^0 coefficient is close to zero, just use remaining coefficients as is
                  normalizedCoeffs.assign(coeffs.begin() + 1, coeffs.end());
              }
          } else {
-             // For numerator, use coefficients as is
              normalizedCoeffs = coeffs;
          }
          
-         // Format the coefficients
          for (size_t i = 0; i < normalizedCoeffs.size(); ++i) {
              if (i > 0) {
                  result += ",";
              }
              
-             // Format with fixed precision - adjust the precision as needed
              char buffer[32];
              
-             // Use fewer decimal places for values close to integers
              if (std::abs(std::round(normalizedCoeffs[i]) - normalizedCoeffs[i]) < 1e-10) {
                  snprintf(buffer, sizeof(buffer), "%.0f", std::round(normalizedCoeffs[i]));
              } else {
@@ -2177,39 +1949,32 @@ class FildesUI : public UI,
      }
  
      void updateVisualizationFromCoefficients() {
-         // Ensure the visualizer has the latest coefficients
-         fVisualizer.setNumerator(fNumerator, true);
-         fVisualizer.setDenominator(fDenominator);
+         fVisualiser.setNumerator(fNumerator, true);
+         fVisualiser.setDenominator(fDenominator);
 
          checkStability();
          
-         // Force a repaint
          repaint();
      }
  
-     // Check if a point is inside the pole-zero plot
      bool isPoleZeroAreaClick(int x, int y) {
          return fPoleZeroArea.contains(x, y);
      }
      
-     // Find the closest pole or zero to a point
      bool findClosestPoleZero(int x, int y, bool& isPole, int& index) {
          const int centerX = fPoleZeroArea.getX() + fPoleZeroArea.getWidth() / 2;
          const int centerY = fPoleZeroArea.getY() + fPoleZeroArea.getHeight() / 2;
          const int radius = fPoleZeroArea.getHeight() / 2 - 10;
          
-         // Convert screen coordinates to complex plane coordinates
          double complexX = static_cast<double>(x - centerX) / radius;
          double complexY = -static_cast<double>(y - centerY) / radius;
          
-         // Get poles and zeros
-         const std::vector<std::complex<double>>& poles = fVisualizer.getPoles();
-         const std::vector<std::complex<double>>& zeros = fVisualizer.getZeros();
+         const std::vector<std::complex<double>>& poles = fVisualiser.getPoles();
+         const std::vector<std::complex<double>>& zeros = fVisualiser.getZeros();
          
-         double minDistance = 0.15; // Minimum distance to consider a hit (in complex plane units)
+         double minDistance = 0.15;
          double closest = 1000.0;
          
-         // Check poles
          for (size_t i = 0; i < poles.size(); ++i) {
              double dx = poles[i].real() - complexX;
              double dy = poles[i].imag() - complexY;
@@ -2222,7 +1987,6 @@ class FildesUI : public UI,
              }
          }
          
-         // Check zeros
          for (size_t i = 0; i < zeros.size(); ++i) {
              double dx = zeros[i].real() - complexX;
              double dy = zeros[i].imag() - complexY;
@@ -2238,7 +2002,6 @@ class FildesUI : public UI,
          return closest < minDistance;
      }
      
-     // Convert screen coordinates to complex plane coordinates
      std::complex<double> screenToComplex(int x, int y, bool maintainConjugatePairs = true) {
          const int centerX = fPoleZeroArea.getX() + fPoleZeroArea.getWidth() / 2;
          const int centerY = fPoleZeroArea.getY() + fPoleZeroArea.getHeight() / 2;
@@ -2247,7 +2010,6 @@ class FildesUI : public UI,
          double real = static_cast<double>(x - centerX) / radius;
          double imag = -static_cast<double>(y - centerY) / radius;
          
-         // Limit to unit circle (with small margin)
          double magnitude = std::sqrt(real*real + imag*imag);
          if (magnitude > 0.95) {
              real *= 0.95 / magnitude;
@@ -2258,7 +2020,7 @@ class FildesUI : public UI,
      }
 
      void checkStability() {
-        const std::vector<std::complex<double>>& poles = fVisualizer.getPoles();
+        const std::vector<std::complex<double>>& poles = fVisualiser.getPoles();
 
         fFilterUnstable = false;
         for (const auto& pole : poles)
@@ -2273,54 +2035,36 @@ class FildesUI : public UI,
         }).detach();
     }
      
-     // Update poles and zeros from dragging
      void updateCoefficientsFromDrag(int x, int y) {
          if (!fIsDragging || fDraggedIndex < 0) {
              return;
          }
          
-         // Convert screen coordinates to complex plane
+         // screen coordinates to complex plane
          std::complex<double> newValue = screenToComplex(x, y);
          
-         // Debug output
-        //  std::cout << "Drag to: (" << newValue.real() << ", " << newValue.imag() << ")" << std::endl;
+         fVisualiser.updatePoleZero(fDraggingPole, fDraggedIndex, newValue);
          
-         // Update pole or zero using visualizer's method which handles conjugate pairs
-         fVisualizer.updatePoleZero(fDraggingPole, fDraggedIndex, newValue);
+         std::vector<double> num = fVisualiser.getNumerator();
+         std::vector<double> den = fVisualiser.getDenominator();
          
-         // Get updated coefficients
-         std::vector<double> num = fVisualizer.getNumerator();
-         std::vector<double> den = fVisualizer.getDenominator();
-         
-         // Update stored coefficients
          fNumerator = num;
          fDenominator = den;
          
-         // Format coefficients for display
          std::string numStr = formatCoefficients(num, false);
          std::string denStr = formatCoefficients(den, true);
          
-         // Debugging output for coefficient changes
-        //  std::cout << "Updating text fields - Num: " << numStr << " Den: " << denStr << std::endl;
-         
-         // Directly update the text of EditableText widgets
          if (fCoeffT != nullptr) {
-             // Force text update for numerator
              fCoeffT->setText(numStr);
          }
          
          if (fCoeffB != nullptr) {
-             // Force text update for denominator
              fCoeffB->setText(denStr);
          }
 
          checkStability();
          
-         // Force repaint to ensure UI updates
          repaint();
-
-
-        // scheduleUpdate(numStr, denStr);
 
          fCoeffToBeSent = true;
 
@@ -2337,15 +2081,11 @@ class FildesUI : public UI,
                 setState("bottomTF", denToSend.c_str());
             }, 30);
         }
-         
-         // Update the plugin state
-        //  setState("topTF", numStr.c_str());
-        //  setState("bottomTF", denStr.c_str());
      }
  
      int findConjugateIndex(bool isPole, int index) {
          const std::vector<std::complex<double>>& roots = 
-             isPole ? fVisualizer.getPoles() : fVisualizer.getZeros();
+             isPole ? fVisualiser.getPoles() : fVisualiser.getZeros();
          
          if (index >= 0 && index < static_cast<int>(roots.size()) && 
              std::abs(roots[index].imag()) > 1e-6) {
@@ -2366,29 +2106,22 @@ class FildesUI : public UI,
  
      bool onMouse(const MouseEvent& ev) override {
          if (isPoleZeroAreaClick(ev.pos.getX(), ev.pos.getY())) {
-             if (ev.button == 1) { // Left button
+             if (ev.button == 1) {
                  if (ev.press) {
-                     // Mouse down
                      bool isPole = false;
                      int index = -1;
                      
                      if (findClosestPoleZero(ev.pos.getX(), ev.pos.getY(), isPole, index)) {
-                         // Start dragging
                          fIsDragging = true;
                          fDraggingPole = isPole;
                          fDraggedIndex = index;
                          fDragStartX = ev.pos.getX();
                          fDragStartY = ev.pos.getY();
                          
-                        //  std::cout << "Drag START: " << (isPole ? "POLE" : "ZERO") 
-                                //    << " index " << index << std::endl;
-                         
                          return true;
                      }
                  } else {
-                     // Mouse up
                      if (fIsDragging) {
-                        //  std::cout << "Drag END" << std::endl;
                          fIsDragging = false;
                          fDraggedIndex = -1;
                          return true;
@@ -2406,7 +2139,6 @@ class FildesUI : public UI,
      bool onMotion(const MotionEvent& ev) override {
 
          if (fIsDragging && fDraggedIndex >= 0) {
-             // Handle dragging
              updateCoefficientsFromDrag(ev.pos.getX(), ev.pos.getY());
              fUpdatedFromPZP = true;
              fUpdatedFromTF = false;
@@ -2426,7 +2158,6 @@ class FildesUI : public UI,
          fWidgetClickable->setSize(50*scaleFactor, 50*scaleFactor);
          fWidgetClickable->setAbsolutePos(100*scaleFactor, 100*scaleFactor);
      
-         // Update the response area
          fResponseArea = DGL::Rectangle<int>(
              50 * scaleFactor, 
              150 * scaleFactor, 
@@ -2457,20 +2188,16 @@ class FildesUI : public UI,
      void setTF(std::string newText) override {
         fUpdatedFromTF = true;
         fUpdatedFromPZP = fUpdatedFromFG = false;
-        //  std::cout << "setTF\n" << std::flush;
          if (newText[0] == 'T') {
              const char* coeffStr = &newText[1];
              parseCoefficients(coeffStr, fNumerator, false);
              updateVisualizationFromCoefficients();
              setState("topTF", &newText[1]);
-            // scheduleUpdate(coeffStr, "");
          }
          else if (newText[0] == 'B') {
              const char* coeffStr = &newText[1];
              parseCoefficients(coeffStr, fDenominator, true);
              updateVisualizationFromCoefficients();
-            //  setState("bottomTF", &newText[1]);
-            //  scheduleUpdate("", coeffStr);
          }
      }
 
@@ -2496,16 +2223,14 @@ class FildesUI : public UI,
         } else if (button == fToLimitButton.get() && fMaxA != 99999999999) {
             fPush = !fPush;
             fToLimitButton->toggleActive();
-            fVisualizer.forceUpdate();
+            fVisualiser.forceUpdate();
             repaint();
         }
     }
     
-    // Dropdown::Callback
     void selectionChanged(Dropdown* dropdown, int selectedIndex) override
     {
         if (dropdown == fFilterTypeDropdown.get()) {
-            // Update parameter visibility based on filter type
             updateFilterParametersVisibility();
             if (fGeneratorTracking) {
                 generateFilter();
@@ -2529,52 +2254,38 @@ class FildesUI : public UI,
         try {
             maxA = std::stod(maxAStr);
         } catch (const std::exception& e) {
-            // std::cout << "Error parsing max amplitude: " << e.what() << std::endl;
             return;
         }
 
         fMaxA = pow(10.0, maxA / 20.0);
-        // std::cout << "fMaxA: " << fMaxA << std::endl;
         updateVisualizationFromCoefficients();
     }
 
      void setGain(std::string gainStr) override
     {
-        // Get the gain value from the input field
         double gain = 1.0;
         
         try {
             gain = std::stod(gainStr);
         } catch (const std::exception& e) {
-            // std::cout << "Error parsing gain: " << e.what() << std::endl;
-            fGainInput->setText(""); // Reset to default gain
+            fGainInput->setText("");
             return;
         }
-
-        // std::cout << "Gain:" << gain << std::endl;
         
         double absGain = pow(10.0, gain / 20.0);
-        // Apply the gain by multiplying all numerator coefficients
         for (double& coeff : fNumerator) {
             coeff *= absGain;
         }
         
-        // Update the visualizer with modified coefficients
-        fVisualizer.setNumerator(fNumerator, false);
+        fVisualiser.setNumerator(fNumerator, false);
         
-        // Format coefficients for display and update the text field
         std::string numStr = formatCoefficients(fNumerator);
         fCoeffT->setText(numStr);
         
-        // Update the plugin state
         setState("topTF", numStr.c_str());
 
-        // scheduleUpdate(numStr, "");
-        
-        // Reset gain to 1.0 after applying
         fGainInput->setText("");
         
-        // Force repaint to update the display
         repaint();
     }
  
@@ -2608,91 +2319,17 @@ class FildesUI : public UI,
      }
  private:
 
-    std::thread fUpdateThread;
-    std::atomic<bool> fUpdateThreadRunning;
-    
-    // Start a background thread to handle parameter updates
-    void startUpdateThread() 
-    {
-        fUpdateThreadRunning = true;
-        fUpdateThread = std::thread([this]() {
-            while (fUpdateThreadRunning) {
-                processPendingUpdates();
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-        });
-    }
-    
-    // Process any pending updates in the background thread
-    void processPendingUpdates() 
-    {
-        if (!fUpdatePending) {
-            return;
-        }
-        
-        // Check if enough time has passed since the last update
-        auto now = std::chrono::steady_clock::now();
-        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - fLastUpdateTime).count();
-            
-        if (elapsedMs < fUpdateThrottleMs) {
-            return;
-        }
-        
-        // Process updates
-        std::string topTF, bottomTF;
-        
-        {
-            std::lock_guard<std::mutex> lock(fUpdateMutex);
-            topTF = fPendingTopTF;
-            bottomTF = fPendingBottomTF;
-            fPendingTopTF.clear();
-            fPendingBottomTF.clear();
-            fUpdatePending = false;
-        }
-        
-        // Send updates to the DSP thread
-        if (!topTF.empty()) {
-            setState("topTF", topTF.c_str());
-        }
-        
-        if (!bottomTF.empty()) {
-            setState("bottomTF", bottomTF.c_str());
-        }
-        
-        fLastUpdateTime = now;
-    }
-    
-    // Schedule an update to be sent to the DSP thread
-    void scheduleUpdate(const std::string& topTF, const std::string& bottomTF) 
-    {
-        std::lock_guard<std::mutex> lock(fUpdateMutex);
-        
-        if (!topTF.empty()) {
-            fPendingTopTF = topTF;
-        }
-        
-        if (!bottomTF.empty()) {
-            fPendingBottomTF = bottomTF;
-        }
-        
-        fUpdatePending = true;
-    }
-
-  // Update visibility of parameters based on filter type
     void updateFilterParametersVisibility()
     {
-        // All filter types use frequency and Q
         fFrequencyInput->setVisible(true);
         
-        // Only certain filter types use gain
-        RBJFilterGenerator::FilterType filterType = 
-            static_cast<RBJFilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
+        FilterGenerator::FilterType filterType = 
+            static_cast<FilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
         
         switch (filterType) {
-            case RBJFilterGenerator::PEAK:
-            case RBJFilterGenerator::LOW_SHELF:
-            case RBJFilterGenerator::HIGH_SHELF:
+            case FilterGenerator::PEAK:
+            case FilterGenerator::LOW_SHELF:
+            case FilterGenerator::HIGH_SHELF:
                 fGainDBInput->setVisible(true);
                 fBandwidthInput->setVisible(true);
                 fQInput->setVisible(false);
@@ -2715,68 +2352,51 @@ class FildesUI : public UI,
     
     void generateFilter()
     {
-        // Get selected filter type
-        RBJFilterGenerator::FilterType filterType = 
-            static_cast<RBJFilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
+        FilterGenerator::FilterType filterType = 
+            static_cast<FilterGenerator::FilterType>(fFilterTypeDropdown->getSelectedIndex());
             
-        // Parse parameters from input fields
-        double frequency = 1000.0;  // Default
-        double Q = 0.7071;  // Default
-        double gainDB = 0.0;  // Default
-        double bandwidth = 1.0;  // Default
+        double frequency = 1000.0; 
+        double Q = 0.7071;
+        double gainDB = 0.0;
+        double bandwidth = 1.0;
         
         try {
-            // Parse frequency
             frequency = std::stod(fFrequencyInput->getText());
-            frequency = std::max(20.0, std::min(20000.0, frequency));  // Clamp to audible range
+            frequency = std::max(20.0, std::min(20000.0, frequency));
             
-            // Parse Q
             Q = std::stod(fQInput->getText());
-            Q = std::max(0.1, std::min(30.0, Q));  // Reasonable Q range
+            Q = std::max(0.1, std::min(30.0, Q));
             
-            // Parse gain for peak/shelf filters
             if (fGainDBInput->isVisible()) {
                 gainDB = std::stod(fGainDBInput->getText());
-                gainDB = std::max(-30.0, std::min(30.0, gainDB));  // Reasonable gain range
+                gainDB = std::max(-30.0, std::min(30.0, gainDB));
             }
             
-            // Parse bandwidth for peak/shelf filters
             if (fBandwidthInput->isVisible()) {
                 bandwidth = std::stod(fBandwidthInput->getText());
-                bandwidth = std::max(0.1, std::min(4.0, bandwidth));  // Reasonable bandwidth range
+                bandwidth = std::max(0.1, std::min(4.0, bandwidth));
             }
         } catch (const std::exception& e) {
             std::cout << "Error parsing filter parameters: " << e.what() << std::endl;
             return;
         }
         
-        // Generate filter coefficients
         std::pair<std::vector<double>, std::vector<double>> coeffs = 
-            fRBJFilterGenerator->generateFilter(filterType, frequency, Q, gainDB, bandwidth);
+            fFilterGenerator->generateFilter(filterType, frequency, Q, gainDB, bandwidth);
         
-        // Update the filter coefficients
         fNumerator = coeffs.first;
         fDenominator = coeffs.second;
         
-        // Format coefficients for display
         std::string numStr = formatCoefficients(fNumerator, false);
         std::string denStr = formatCoefficients(fDenominator, true);
         
-        // Update coefficient text fields
         fCoeffT->setText(numStr);
         fCoeffB->setText(denStr);
         
-        // Update visualizer and GUI
         updateVisualizationFromCoefficients();
         
-        // Update plugin state
         setState("topTF", numStr.c_str());
         setState("bottomTF", denStr.c_str());
-
-
-        // scheduleUpdate(numStr, denStr);
-        
-        // std::cout << "RBJ filter generated successfully!" << std::endl;
     }
  };
  

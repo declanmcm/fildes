@@ -1,20 +1,3 @@
-/*
- * DISTRHO Plugin Framework (DPF)
- * Copyright (C) 2019-2021 Jean Pierre Cimalando <jp-dev@inbox.ru>
- * Copyright (C) 2012-2024 Filipe Coelho <falktx@falktx.com>
- *
- * Permission to use, copy, modify, and/or distribute this software for any purpose with
- * or without fee is hereby granted, provided that the above copyright notice and this
- * permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD
- * TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN
- * NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
- * IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include "DistrhoPlugin.hpp"
 
 #include <string.h>
@@ -23,62 +6,6 @@
 #include <bitset>
 #include <atomic>
 #include <mutex>
-
-/**
- * A lock-free ring buffer for transferring parameter updates from UI to audio thread
- */
-template<typename T, size_t Size>
-class RingBuffer {
-public:
-    RingBuffer() : writeIndex(0), readIndex(0) {
-        static_assert((Size & (Size - 1)) == 0, "Size must be a power of 2");
-    }
-    
-    bool push(const T& item) {
-        const size_t currentWrite = writeIndex.load(std::memory_order_relaxed);
-        const size_t nextWrite = (currentWrite + 1) & (Size - 1);
-        
-        if (nextWrite == readIndex.load(std::memory_order_acquire)) {
-            return false; // Buffer is full
-        }
-        
-        buffer[currentWrite] = item;
-        writeIndex.store(nextWrite, std::memory_order_release);
-        return true;
-    }
-    
-    bool pop(T& item) {
-        const size_t currentRead = readIndex.load(std::memory_order_relaxed);
-        
-        if (currentRead == writeIndex.load(std::memory_order_acquire)) {
-            return false; // Buffer is empty
-        }
-        
-        item = buffer[currentRead];
-        readIndex.store((currentRead + 1) & (Size - 1), std::memory_order_release);
-        return true;
-    }
-    
-    void clear() {
-        readIndex.store(writeIndex.load(std::memory_order_acquire), std::memory_order_release);
-    }
-    
-private:
-    T buffer[Size];
-    std::atomic<size_t> writeIndex;
-    std::atomic<size_t> readIndex;
-};
-
-struct FilterUpdate {
-    enum Type {
-        TOP_COEFFS,
-        BOTTOM_COEFFS
-    };
-    
-    Type type;
-    double coeffs[100];  // Store the actual coefficient values
-    int numCoeffs;
-};
 
 START_NAMESPACE_DISTRHO
 
@@ -92,13 +19,8 @@ class Fildes : public Plugin
     double fOldBottom[100];
     double outMem[2][100];
 	double inMem[2][100];
-	double gain;
-    double alpha;
     int numCoeffsTop, numCoeffsBottom, outi, ini, xz1, xz2, yz1, yz2, fRuni, fPrevChangei, fInterpolIter, fMaxValCount;
     bool fTFChanged;
-
-    RingBuffer<FilterUpdate, 16> parameterQueue;
-    std::mutex paramUpdateMutex;
 
 public:
     Fildes()
@@ -121,60 +43,34 @@ public:
 
         fRuni = 0;
         fPrevChangei = 0;
-        alpha = 0.01;
-
-		//std::memcpy(topTF, acoeff, sizeof(acoeff));
-		gain = 1;
-		//std::memcpy(bottomTF, bcoeff, sizeof(bcoeff));
 
     }
 
-   /**
-      Get the plugin label.@n
-      This label is a short restricted name consisting of only _, a-z, A-Z and 0-9 characters.
-    */
     const char* getLabel() const override
     {
         return "fildes";
     }
 
-   /**
-      Get an extensive comment/description about the plugin.
-    */
     const char* getDescription() const override
     {
         return "An educational filter designer";
     }
 
-   /**
-      Get the plugin author/maker.
-    */
     const char* getMaker() const override
     {
         return "Declan McMahon";
     }
 
-   /**
-      Get the plugin license (a single line of text or a URL).@n
-      For commercial plugins this should return some short copyright information.
-    */
     const char* getLicense() const override
     {
         return "MIT";
     }
 
-   /**
-      Get the plugin version, in hexadecimal.
-    */
     uint32_t getVersion() const override
     {
         return d_version(1, 0, 0);
     }
 
-   /**
-      Initialize the audio port @a index.@n
-      This function will be called once, shortly after the plugin is created.
-    */
     void initAudioPort(const bool input, const uint32_t index, AudioPort& port) override
     {
         // treat meter audio ports as stereo
@@ -184,63 +80,15 @@ public:
         Plugin::initAudioPort(input, index, port);
     }
 
-   /**
-      Initialize the parameter @a index.@n
-      This function will be called once, shortly after the plugin is created.
-    */
     void initParameter(const uint32_t index, Parameter& parameter) override
     {
        
     }
 
-   /**
-      Get the current value of a parameter.@n
-      The host may call this function from any context, including realtime processing.
-    */
     float getParameterValue(const uint32_t index) const override
     {
         return 0;
     }
-
-    // // Modified processTFString to queue updates instead of modifying filter params directly
-    // void processTFString(const char* str, bool isTop) {
-    //     FilterUpdate update;
-    //     update.type = isTop ? FilterUpdate::TOP_COEFFS : FilterUpdate::BOTTOM_COEFFS;
-    //     update.numCoeffs = 0;
-        
-    //     // Create a copy of the input string to tokenize
-    //     char inputCopy[1024]; // Ensure this is large enough for your input strings
-    //     strncpy(inputCopy, str, sizeof(inputCopy) - 1);
-    //     inputCopy[sizeof(inputCopy) - 1] = '\0'; // Ensure null-termination
-        
-    //     // Tokenize the string using commas as the delimiter
-    //     size_t index = 0;
-    //     char* token = strtok(inputCopy, ",");
-        
-    //     while (token != NULL && index < 100) {
-    //         // Convert the token to a float, treating empty tokens as 0
-    //         double value = (token[0] == '\0') ? 0.0f : strtof(token, NULL);
-    //         update.coeffs[index] = value;
-            
-    //         // Update the highest non-zero index
-    //         if (value != 0.0f) {
-    //             update.numCoeffs = (int)index;
-    //         }
-            
-    //         // Move to the next token
-    //         token = strtok(NULL, ",");
-    //         ++index;
-    //     }
-        
-    //     // Fill remaining elements with 0
-    //     for (; index < 100; ++index) {
-    //         update.coeffs[index] = 0.0f;
-    //     }
-        
-    //     // Add update to the queue - use mutex to ensure we don't push while queue is being processed
-    //     std::lock_guard<std::mutex> lock(paramUpdateMutex);
-    //     parameterQueue.push(update);
-    // }
 
     void processTFString(const char* str, bool type) {
 
@@ -258,49 +106,32 @@ public:
         }
         *numCoeffs = -1;
 
-        // Create a copy of the input string to tokenize
-        char inputCopy[1024]; // Ensure this is large enough for your input strings
+        char inputCopy[1024];
         strncpy(inputCopy, str, sizeof(inputCopy) - 1);
-        inputCopy[sizeof(inputCopy) - 1] = '\0'; // Ensure null-termination
+        inputCopy[sizeof(inputCopy) - 1] = '\0';
 
-        // Tokenize the string using commas as the delimiter
         char* token = strtok(inputCopy, ",");
         while (token != NULL && index < 100) {
-            // Convert the token to a float, treating empty tokens as 0
             double value = (token[0] == '\0') ? 0.0f : strtof(token, NULL);
             outputArray[index] = value;
 
-            // Update the highest non-zero index
             if (value != 0.0f) {
                 *numCoeffs = (int)index;
             }
 
-            // Move to the next token
             token = strtok(NULL, ",");
             ++index;
         }
 
-        // Fill remaining elements with 0 if the array is larger than the input
         for (; index < 100; ++index) {
             outputArray[index] = 0.0f;
         }
-
-        // for (int i = 0; i < 100; i++) {
-        //     fOldTop[i] = topTF[i];
-        //     fOldBottom[i] = bottomTF[i];
-        // }
-
-        // for (int i = 0; i < 4; i++) {
-        //     std::cout << topTF[i] << "\n" << std::flush;
-        //     std::cout << bottomTF[i] << "\n" << std::flush;
-        // }
 
         fPrevChangei = fRuni;
         fTFChanged = true;
     }
 
     void setState(const char* key, const char* value) override {
-        //std::cout << "setState\n" << std::flush;
         if (!std::strcmp(key, "topTF")) {
             processTFString(value, true);
         } else if (!std::strcmp(key, "bottomTF")) {
@@ -308,29 +139,17 @@ public:
         }
     }
 
-   /**
-      Change a parameter value.@n
-      The host may call this function from any context, including realtime processing.@n
-      When a parameter is marked as automatable, you must ensure no non-realtime operations are performed.
-      @note This function will only be called for parameter inputs.
-    */
     void setParameterValue(const uint32_t index, const float value) override
     {
         
     }
 
-   /**
-      Run/process function for plugins without MIDI input.
-      @note Some parameters might be null if there are no audio inputs or outputs.
-    */
     void run(const float** const inputs, float** const outputs, const uint32_t frames) override
     {
 
         if (inputs == nullptr || outputs == nullptr || inputs[0] == nullptr || outputs[0] == nullptr) {
             return;
         }
-
-        // processParameterQueue();
 
         int found = 0;
         double outputCopy[frames];
@@ -378,13 +197,10 @@ public:
                 outputs[n][i] = static_cast<float>(res);
                 outputCopy[i] = res;
 
-                //std::cerr << outputs[n][i] << std::endl;
-
                 uint32_t bits;
                 std::memcpy(&bits, &outputs[n][i], sizeof(bits));
 
                 if (bits == 0xFFC00000) {
-                    //std::cout << "TOO LOUD" << std::endl;
                     fMaxValCount++;
                     if (fMaxValCount > 100) {
                         fMaxValCount = 0;
@@ -393,36 +209,6 @@ public:
                     }
                 }
             }
-        }
-    }
-
-    private:
-    // New method to process parameter updates safely
-    void processParameterQueue() {
-        FilterUpdate update;
-        
-        // Use mutex to prevent UI from pushing while we're processing
-        std::lock_guard<std::mutex> lock(paramUpdateMutex);
-        
-        while (parameterQueue.pop(update)) {
-            // Store old values for interpolation if needed
-            if (update.type == FilterUpdate::TOP_COEFFS) {
-                for (int i = 0; i < 100; i++) {
-                    fOldTop[i] = topTF[i];
-                    fNewTop[i] = update.coeffs[i];
-                }
-                numCoeffsTop = update.numCoeffs;
-            } else {
-                for (int i = 0; i < 100; i++) {
-                    fOldBottom[i] = bottomTF[i];
-                    fNewBottom[i] = update.coeffs[i];
-                }
-                numCoeffsBottom = update.numCoeffs;
-            }
-            
-            // Mark for interpolation
-            fPrevChangei = fRuni;
-            fTFChanged = true;
         }
     }
 
