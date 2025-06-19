@@ -211,7 +211,6 @@ public:
             }
         }
     }
-
 };
 
 Plugin* createPlugin()

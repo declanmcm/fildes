@@ -6,7 +6,7 @@
 #include <chrono>
 #include <string>
 #include <thread>
- #include <atomic>
+#include <atomic>
 #include <mutex>
 
 START_NAMESPACE_DGL
