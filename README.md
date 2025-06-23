@@ -32,12 +32,12 @@
 
 ## Build Instructions
 
-\`\`\`bash
+```bash
 git clone <this-repo>
 cd <this-repo>
 # Ensure DPF is set up correctly
 make DPF_PATH=../DPF DPF_PLUGIN_HAS_UI=true
-\`\`\`
+```
 
 Alternatively, use your preferred CMake-based build setup if you’ve adapted it.
 
