@@ -32,6 +32,8 @@
 
 ## Build Instructions
 
+Install [DPF](https://github.com/DISTRHO/DPF), then navigate into the plugins directory.
+
 ```bash
 git clone <this-repo>
 cd <this-repo>
