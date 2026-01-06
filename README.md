@@ -1,5 +1,9 @@
 # Fildes: Interactive Digital Filter Designer Plugin
 
+[Example image 1](lpf1k.jpg)
+[Example image 2]](ex1.jpg)
+[Example image 3](unstable.jpg)
+
 **Author:** Declan McMahon  
 **License:** MIT  
 **Version:** 1.0.0  
