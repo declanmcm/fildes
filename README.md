@@ -34,16 +34,26 @@
 
 ## Build Instructions
 
-Install [DPF](https://github.com/DISTRHO/DPF), then navigate into the plugins directory.
+Install [DPF](https://github.com/DISTRHO/DPF)
 
 ```bash
+git clone <DPF-repo>
+cd DPF
+```
+DPF must be at a specific commit from when I was developing this plugin (around end of December 2023)
+```bash
+git checkout 4772a38
+git submodule update --init --recursive
+```
+Now clone and make fildes
+```bash
+mkdir plugins
+cd plugins
 git clone <this-repo>
 cd <this-repo>
-# Ensure DPF is set up correctly
-make DPF_PATH=../DPF DPF_PLUGIN_HAS_UI=true
+make
 ```
 
-Alternatively, use your preferred CMake-based build setup if you’ve adapted it.
 
 ## Usage
 
