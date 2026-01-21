@@ -46,6 +46,10 @@ public:
 
     }
 
+    const char* getName() const override {
+        return "Fildes";
+    }
+
     const char* getLabel() const override
     {
         return "fildes";
@@ -69,6 +73,10 @@ public:
     uint32_t getVersion() const override
     {
         return d_version(1, 0, 0);
+    }
+
+    int64_t getUniqueId() const override {
+        return 12;
     }
 
     void initAudioPort(const bool input, const uint32_t index, AudioPort& port) override
